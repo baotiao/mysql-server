@@ -2344,6 +2344,7 @@ static ulint af_get_pct_for_dirty() {
     }
   } else if (dirty_pct >= srv_max_dirty_pages_pct_lwm) {
     /* We should start flushing pages gradually. */
+    // 根据脏页的百分比计算具体应该刷下去的脏页数
     return (static_cast<ulint>((dirty_pct * 100) /
                                (srv_max_buf_pool_modified_pct + 1)));
   }
@@ -3100,18 +3101,23 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
   ulint warn_count = 0;
   int64_t sig_count = os_event_reset(buf_flush_event);
 
+  // flush coordinator thread 卡在这个循环里面
   while (srv_shutdown_state.load() == SRV_SHUTDOWN_NONE) {
     /* The page_cleaner skips sleep if the server is
     idle and there are no pending IOs in the buffer pool
     and there is work to do. */
     if (srv_check_activity(last_activity) || buf_get_n_pending_read_ios() ||
         n_flushed == 0) {
+      // 我们一般会将 next_loop_time = curr_time + 1000;
+      // 也就是当前time 过去1s 以后, 就是下一次要执行的time
       ret_sleep = pc_sleep_if_needed(next_loop_time, sig_count);
 
       if (srv_shutdown_state.load() != SRV_SHUTDOWN_NONE) {
         break;
       }
     } else if (ut_time_monotonic_ms() > next_loop_time) {
+      // 这个branch 是如果现在的时间已经超过的上次设定的这次要执行的时间
+      // 那么开始执行page clean 操作
       ret_sleep = OS_SYNC_TIME_EXCEEDED;
     } else {
       ret_sleep = 0;
@@ -3119,6 +3125,7 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
 
     sig_count = os_event_reset(buf_flush_event);
 
+    // 从sleep 从返回了, 要执行page clean 任务了
     if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
       const auto curr_time = ut_time_monotonic_ms();
 

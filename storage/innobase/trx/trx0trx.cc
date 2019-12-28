@@ -1531,7 +1531,7 @@ static bool trx_write_serialisation_history(
       auto undo_ptr = &trx->rsegs.m_redo;
       trx_undo_gtid_set(trx, undo_ptr->update_undo);
 
-      // undo log cleanup 时机为什么是在这个时候
+      // 这里cleanup 是将undo log 加入到rollback segment history list
       trx_undo_update_cleanup(trx, undo_ptr, undo_hdr_page, update_rseg_len,
                               (update_rseg_len ? 1 : 0), mtr);
     }

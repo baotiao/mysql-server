@@ -401,6 +401,9 @@ struct trx_undo_t {
   ulint withdraw_clock;     /*!< the withdraw clock value of the
                             buffer pool when guess_block was stored */
   /*-----------------------------*/
+  // rollback segment 里面的4个 list update_undo_list, update_undo_cached
+  // 等等通过这个undo_list 变量将trx_undo_t 连接到一起
+  
   UT_LIST_NODE_T(trx_undo_t) undo_list;
   /*!< undo log objects in the rollback
   segment are chained into lists */
@@ -453,6 +456,7 @@ void trx_undo_gtid_write(trx_t *trx, trx_ulogf_t *undo_header, trx_undo_t *undo,
     start on this page (remember that     \
     in an update undo log, the first page \
     can contain several undo logs) */
+// 当前undo page 上面的空闲位置的offset
 #define TRX_UNDO_PAGE_FREE                 \
   4 /*!< On each page of the undo log this \
     field contains the byte offset of the  \
@@ -555,6 +559,8 @@ page of an update undo log segment. */
 #define TRX_UNDO_PREV_LOG                 \
   32 /*!< Offset of the previous undo log \
      header on this page, 0 if none */
+// trx 进入到history list 的时候, 主要用TRX_UNDO_HISTORY_NODE
+// 这个指针把要purge 的node 连接到一起
 #define TRX_UNDO_HISTORY_NODE              \
   34 /*!< If the log is put to the history \
      list, the file list node is here */

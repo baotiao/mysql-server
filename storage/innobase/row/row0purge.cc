@@ -655,8 +655,11 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_del_mark(
       if (node->index->is_multi_value()) {
         row_purge_remove_multi_sec_if_poss(node, heap, false);
       } else {
+        // 最常见的走这个branch
+        // 这里通过undo log 将之前的log 打印出来
         dtuple_t *entry = row_build_index_entry_low(
             node->row, NULL, node->index, heap, ROW_BUILD_FOR_PURGE);
+        // 判断是否要删除相应的secondary index
         row_purge_remove_sec_if_poss(node, node->index, entry);
       }
 
@@ -668,6 +671,7 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_del_mark(
 
   mem_heap_free(heap);
 
+  // 这里才是最后把delete 的row, 给purge 掉, 确切的物理删除的部分
   return (row_purge_remove_clust_if_poss(node));
 }
 
@@ -709,8 +713,10 @@ static void row_purge_upd_exist_or_extern_func(
         row_purge_remove_multi_sec_if_poss(node, heap, !non_mv_upd);
       } else {
         /* Build the older version of the index entry */
+        // 同样使用undo 构建出老的record
         dtuple_t *entry = row_build_index_entry_low(
             node->row, NULL, node->index, heap, ROW_BUILD_FOR_PURGE);
+        // 然后将老版本的record 对应的secondary index 进行删除
         row_purge_remove_sec_if_poss(node, node->index, entry);
         mem_heap_empty(heap);
       }

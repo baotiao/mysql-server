@@ -93,6 +93,10 @@ can still remove old versions from the bottom of the stack. */
    -------------------------------------------------------------------
 latches?
 -------
+// 这里主要说的是 rollback segment, undo log, history list 上面都有mutex,
+// 不只是有trx_sys_t::mutex 这把大锁, 在事务申请成功以后,
+// 尽可能的不去用trx_sys_t::mutex, 而是去使用rollback segment, undo log
+// 里面的Mutex
 The contention of the trx_sys_t::mutex should be minimized. When a transaction
 does its first insert or modify in an index, an undo log is assigned for it.
 Then we must have an x-latch to the rollback segment header.
@@ -288,6 +292,8 @@ trx_undo_rec_t *trx_undo_get_next_rec(
 @param[in]	space		undo log header space
 @param[in]	page_size	page size
 @param[in]	page_no		undo log header page number
+// 这里offset 可以看出 一个undo page 里面可能是包含有多个undo log header
+// 这里指定了某一个undo log header 从而可以确定使用的是具体的undo log
 @param[in]	offset		undo log header offset on page
 @param[in]	mode		latching mode: RW_S_LATCH or RW_X_LATCH
 @param[in,out]	mtr		mini-transaction
@@ -923,6 +929,8 @@ static page_no_t trx_undo_free_page(
     ibool in_history,      /*!< in: TRUE if the undo log is in the history
                            list */
     space_id_t space,      /*!< in: space */
+    // 这里hdr_page_no 和 page_no 的关系就是, 当当前的undo 有多个Undo log page
+    // 的时候, hdr_page 是第一个page, page_no 是当前要free 的page
     page_no_t hdr_page_no, /*!< in: header page number */
     page_no_t page_no,     /*!< in: page number to free: must not be the
                            header page */
@@ -1659,22 +1667,11 @@ dberr_t trx_undo_assign_undo(
   DBUG_EXECUTE_IF("ib_create_table_fail_too_many_trx",
                   err = DB_TOO_MANY_CONCURRENT_TRXS;
                   goto func_exit;);
-  undo =
-#ifdef UNIV_DEBUG
-      srv_inject_too_many_concurrent_trxs
-          ? nullptr
-          :
-#endif
-          trx_undo_reuse_cached(trx, rseg, type, trx->id, trx->xid, &mtr);
 
-<<<<<<< HEAD
   // 先尝试从cached list 上去获得undo, 如果没有cached 的undo 了,
   // 那么再申请新的undo slot, 并创建对应的undo page
   undo = trx_undo_reuse_cached(trx, rseg, type, trx->id, trx->xid, &mtr);
   if (undo == NULL) {
-=======
-  if (undo == nullptr) {
->>>>>>> master
     err = trx_undo_create(trx, rseg, type, trx->id, trx->xid, &undo, &mtr);
     if (err != DB_SUCCESS) {
       goto func_exit;
@@ -1830,10 +1827,14 @@ void trx_undo_update_cleanup(
   trx_purge_add_update_undo_to_history(
       trx, undo_ptr, undo_page, update_rseg_history_len, n_added_logs, mtr);
 
+  // 将这个undo record 从rollback segment update_undo_list 中删除
   UT_LIST_REMOVE(rseg->update_undo_list, undo);
 
   undo_ptr->update_undo = NULL;
 
+  // 如果这个undo log 被重用, 那么就把这个trx_undo_t 结构体添加到update_undo_cached
+  // 这个list 上去
+  // 否则因为对应的undo log要被释放了, trx_undo_t 结构体也直接被释放了
   if (undo->state == TRX_UNDO_CACHED) {
     UT_LIST_ADD_FIRST(rseg->update_undo_cached, undo);
 

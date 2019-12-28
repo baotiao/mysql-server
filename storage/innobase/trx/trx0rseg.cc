@@ -96,6 +96,8 @@ page_no_t trx_rseg_header_create(space_id_t space_id,
   /* Initialize maximum transaction number. */
   mlog_write_ull(rsegf + TRX_RSEG_MAX_TRX_NO, 0, mtr);
 
+  // 这里区分了是把rollback segment 放在system space, 也就是放在ibd1 文件里面
+  // 还是放在独立的tablespace 里面
   if (space_id == TRX_SYS_SPACE) {
     /* All rollback segments in the system tablespace need
     to be found in the TRX_SYS page in the rseg_id slot.

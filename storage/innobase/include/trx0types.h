@@ -230,6 +230,7 @@ struct trx_rseg_t {
 
   /*--------------------------------------------------------*/
 
+  // 下面几个字段主要用于管理purge 的时候, 当前可以Purge 的位点信息
   /** Page number of the last not yet purged log header in the history
   list; FIL_NULL if all list purged */
   page_no_t last_page_no;
@@ -474,9 +475,8 @@ class Rsegs {
 
 /** Rollback segements from a given transaction with trx-no
 scheduled for purge. */
-// 一个trx 对应的多个undo rollback segment
-// TODO(baotiao): 为什么一个trx 要对应多个undo rollback segment
-// 我记得在事务开始阶段一旦设置了rollback segment 就一直从这个rseg 分配slot 了
+// 这个对象保存着要被 purge 的rollback segment 的vector
+// 所以是一个vector
 class TrxUndoRsegs {
  public:
   /** Default constructor */
@@ -538,7 +538,9 @@ class TrxUndoRsegs {
   /** Rollback segments of a transaction, scheduled for purge. */
   Rsegs_Vector m_rsegs;
 };
-
+// TrxUndoRsegs 组成的小顶堆, 根据 m_trx_no 进行排序, m_trx_no 是当前rollback
+// segment 里面最小的事务号
+// 这个purge_pq_t 主要用在Purge_sys 里面
 typedef std::priority_queue<
     TrxUndoRsegs, std::vector<TrxUndoRsegs, ut_allocator<TrxUndoRsegs>>,
     TrxUndoRsegs>

@@ -204,6 +204,7 @@ void trx_rsegsf_set_page_no(trx_rsegsf_t *rsegs_header, ulint slot,
     transactions */
 /* Header for the file segment where
 this page is placed */
+// 这里rollback segment 里面存在history list 的base node
 #define TRX_RSEG_FSEG_HEADER (8 + FLST_BASE_NODE_SIZE)
 /* Undo log segment slots */
 #define TRX_RSEG_UNDO_SLOTS (8 + FLST_BASE_NODE_SIZE + FSEG_HEADER_SIZE)

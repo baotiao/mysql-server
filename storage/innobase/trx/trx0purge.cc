@@ -298,6 +298,10 @@ void trx_purge_sys_close(void) {
 
 /** Adds the update undo log as the first log in the history list. Removes the
  update undo log segment from the rseg slot if it is too big for reuse. */
+// 把当前这个undo_log 添加到自己rollback segment 的history list 中
+// 注意这里不是添加到purge_sys 里面, 把rollback segment 添加到purge_sys
+// 是在事务提交的时候就做了
+//
 void trx_purge_add_update_undo_to_history(
     trx_t *trx,               /*!< in: transaction */
     trx_undo_ptr_t *undo_ptr, /*!< in/out: update undo log. */
@@ -334,6 +338,7 @@ void trx_purge_add_update_undo_to_history(
       ib::fatal(ER_IB_MSG_1165) << "undo->id is " << undo->id;
     }
 
+    // 把undo id 写入到rollback_segment 结构体的undo segment slot中
     trx_rsegf_set_nth_undo(rseg_header, undo->id, FIL_NULL, mtr);
 
     MONITOR_DEC(MONITOR_NUM_UNDO_SLOT_USED);
@@ -348,6 +353,7 @@ void trx_purge_add_update_undo_to_history(
   }
 
   /* Add the log as the first in the history list */
+  // 将这个undo log 加入到rollback segment 的history list 上
   flst_add_first(rseg_header + TRX_RSEG_HISTORY,
                  undo_header + TRX_UNDO_HISTORY_NODE, mtr);
 
@@ -371,6 +377,7 @@ void trx_purge_add_update_undo_to_history(
   /* Write GTID information if there. */
   trx_undo_gtid_write(trx, undo_header, undo, mtr);
 
+  // 如果当前rollback segment 里面的last_page_no 是空的, 则更新成当前的这个Undo
   if (rseg->last_page_no == FIL_NULL) {
     rseg->last_page_no = undo->hdr_page_no;
     rseg->last_offset = undo->hdr_offset;
@@ -508,6 +515,7 @@ static void trx_purge_truncate_rseg_history(
 
   mutex_enter(&(rseg->mutex));
 
+  // rollback segment header
   rseg_hdr =
       trx_rsegf_get(rseg->space_id, rseg->page_no, rseg->page_size, &mtr);
 
@@ -1958,6 +1966,9 @@ static MY_ATTRIBUTE((warn_unused_result))
   if (!purge_sys->next_stored) {
     trx_purge_choose_next_log();
 
+    // 执行完trx_purge_choose_next_log() 之后, 如果有rollback 需要purge
+    // 那么purge_sys->next_stored 里面应该是存有内容的
+    //
     if (!purge_sys->next_stored) {
       DBUG_PRINT("ib_purge", ("no logs left in the history list"));
       return (NULL);
@@ -2005,6 +2016,8 @@ static ulint trx_purge_attach_undo_recs(const ulint n_purge_threads,
   /* Validate some pre-requisites and reset done flag. */
   ulint i = 0;
 
+  // 把purge_sys 里面的thr->child->done 设置成false
+  // 这里undo 使用的node 是 purge_node_t
   for (thr = UT_LIST_GET_FIRST(purge_sys->query->thrs);
        thr != NULL && i < n_purge_threads;
        thr = UT_LIST_GET_NEXT(thrs, thr), ++i) {
@@ -2260,6 +2273,7 @@ ulint trx_purge(ulint n_purge_threads, /*!< in: number of purge tasks
 #endif /* UNIV_DEBUG */
 
   /* Fetch the UNDO recs that need to be purged. */
+  // 找出需要puage 的 undo recs, 交给purge thread 处理
   n_pages_handled = trx_purge_attach_undo_recs(n_purge_threads, batch_size);
 
   /* Do we do an asynchronous purge or not ? */

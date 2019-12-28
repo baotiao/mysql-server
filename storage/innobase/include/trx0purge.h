@@ -1023,11 +1023,15 @@ struct trx_purge_t {
   TrxUndoRsegsIterator *rseg_iter; /*!< Iterator to get the next rseg
                                    to process */
 
+  // purge_queue 是按照trx_no 排好序的小顶堆, 在5.6 里面是自己实现的一个struct
+  // 8.0 就直接使用priority_queue
   purge_pq_t *purge_queue; /*!< Binary min-heap, ordered on
                            TrxUndoRsegs::trx_no. It is protected
                            by the pq_mutex */
   PQMutex pq_mutex;        /*!< Mutex protecting purge_queue */
 
+  // 5.7 后来引入的 Undo tablespace truncate 需要标记当前被truncate 的undo
+  // tablespace
   undo::Truncate undo_trunc; /*!< Track UNDO tablespace marked
                              for truncate. */
 
@@ -1036,6 +1040,7 @@ struct trx_purge_t {
 };
 
 /** Choose the rollback segment with the smallest trx_no. */
+// 在purge_sys 中使用, 用于遍历 purge_pg_t 里面的优先级队列
 struct TrxUndoRsegsIterator {
   /** Constructor */
   TrxUndoRsegsIterator(trx_purge_t *purge_sys);
@@ -1059,6 +1064,8 @@ struct TrxUndoRsegsIterator {
   TrxUndoRsegs m_trx_undo_rsegs;
 
   /** Track the current element in m_trx_undo_rseg */
+  // using Rseg_Iterator = Rsegs_Vector::iterator;
+  // 就是一个vecotr 的iterator
   Rseg_Iterator m_iter;
 
   /** Sentinel value */

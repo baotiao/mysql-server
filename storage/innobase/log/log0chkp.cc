@@ -711,6 +711,8 @@ static void log_preflush_pool_modified_pages(const log_t &log,
   Note, that this could fire even if we did not run out
   of space in log files (users still may write to redo). */
 
+  // 如果buf_flush 线程不活跃, 那么log_checkpoint 线程自己执行flush 操作
+  // 否则唤醒page cleaner 线程即可
   if (new_oldest == LSN_MAX
       /* Forced flush request is processed by page_cleaner, if
       it's not active, then we must do flush ourselves. */
@@ -750,6 +752,12 @@ static bool log_consider_sync_flush(log_t &log) {
   current_lsn =
       log_translate_sn_to_lsn(log_translate_lsn_to_sn(current_lsn) + margin);
 
+  // 这里加了sync flush 的判断, 如果这次改动的内容超过了15/16 * redo 可用空间,
+  // 那么这个时候就必须做一个同步的flush 了, flush 大小就是这次为flush
+  // 的内容大小不能超过 15/16 * redo 可用空间
+  // 因为这里是进行同步flush, 而且执行flush 的是log_checkpoint 线程,
+  // 因此尽可能的少flush, 只需要不让未flush 的page 超过15/16 * redo
+  // 可用空间就可以了
   if (current_lsn - oldest_lsn > log.max_modified_age_sync) {
     ut_a(current_lsn > log.max_modified_age_sync);
 
@@ -758,6 +766,8 @@ static bool log_consider_sync_flush(log_t &log) {
 
   const lsn_t requested_checkpoint_lsn = log.requested_checkpoint_lsn;
 
+  // 如果想要打checkpoint lsn 比目前已经flush 的lsn flush_up_to 大,
+  // 那么[flush_up_to, checkpoint_lsn) 这一段的日志就需要强行flush 了
   if (requested_checkpoint_lsn > flush_up_to) {
     flush_up_to = requested_checkpoint_lsn;
   }
@@ -765,6 +775,7 @@ static bool log_consider_sync_flush(log_t &log) {
   if (flush_up_to > oldest_lsn) {
     log_checkpointer_mutex_exit(log);
 
+    // 进行同步的preflush 操作
     log_preflush_pool_modified_pages(log, flush_up_to);
 
     log_checkpointer_mutex_enter(log);
@@ -1043,6 +1054,7 @@ void log_update_limits(log_t &log) {
 bool log_calc_max_ages(log_t &log) {
   ut_ad(log_writer_mutex_own(log));
 
+  // 计算redo log 实际能够存储的大小空间
   log.lsn_real_capacity =
       log.files_real_capacity - LOG_FILE_HDR_SIZE * log.n_files;
 
@@ -1079,12 +1091,18 @@ bool log_calc_max_ages(log_t &log) {
 
   const lsn_t limit = log.lsn_capacity_for_free_check;
 
+  // 这里LOG_POOL_PREFLUSH_RATIO_SYNC 默认是16
+  // 也就是max_modified_age_sync = 15/16 * limit
   log.max_modified_age_sync = limit - limit / LOG_POOL_PREFLUSH_RATIO_SYNC;
 
+  // max_modified_age_async = 7/8 * limit
   log.max_modified_age_async = limit - limit / LOG_POOL_PREFLUSH_RATIO_ASYNC;
 
+  // max_checkpoint_age_async = 31/32 * limit
   log.max_checkpoint_age_async =
       limit - limit / LOG_POOL_CHECKPOINT_RATIO_ASYNC;
+  // 所以 max_checkpoint_age_async > max_modified_age_sync > max_modified_age_async
+  // 先达到异步page flush, 再达到同步flush, 最后达到异步checkpoint
 
   return success;
 }

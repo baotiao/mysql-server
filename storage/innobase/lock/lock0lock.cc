@@ -2147,6 +2147,8 @@ static void lock_grant(lock_t *lock) /*!< in/out: waiting lock request */
 {
   ut_ad(lock_mutex_own());
 
+  // 这里lock 是将要获得这个lock 的那个lock
+  // 指向的是将要执行的trx
   if (!lock->trx->owns_mutex) {
     trx_mutex_enter(lock->trx);
   }
@@ -2167,6 +2169,7 @@ static void lock_grant(lock_t *lock) /*!< in/out: waiting lock request */
   DBUG_PRINT("ib_lock", ("wait for trx " TRX_ID_FMT " ends",
                          trx_get_id_for_print(lock->trx)));
 
+  // 如果之前的线程 suspended, 就唤醒它
   lock_reset_wait_and_release_thread_if_suspended(lock);
 
   if (!lock->trx->owns_mutex) {
@@ -2624,9 +2627,17 @@ static void lock_rec_grant(lock_t *in_lock, bool use_fcfs) {
 
     for (auto lock = lock_rec_get_first_on_page_addr(lock_hash, space, page_no);
          lock != nullptr; lock = lock_rec_get_next_on_page(lock)) {
+      // 这里需要判断在前面已经通过lock_rec_discard 将in_lock 释放了
+      // 然后依然需要判断这个这个page 上面的lock 是否需要等待这个page
+      // 上面的其他Lock, 因为有可能这次释放的是s lock, 那么这个page
+      // 上面如果还有s lock 在持有, 那么这个page 上面想持有x lock 的依然得不到.
+      // 如果这里!lock_rec_has_to_wait_in_queue(lock) 表示不会等待这个page
+      // 里面的其他Lock 了
       if (lock->is_waiting() && !lock_rec_has_to_wait_in_queue(lock)) {
         /* Grant the lock */
         ut_ad(lock->trx != in_lock->trx);
+        // 将lock 给等待这个lock 的trx
+        // 那么这个trx 就从waiting => running
         lock_grant(lock);
       }
     }
@@ -2650,7 +2661,9 @@ to a lock. NOTE: all record locks contained in in_lock are removed.
                                 qualified to it
 @param[in]	use_fcfs	true -> use first come first served strategy */
 static void lock_rec_dequeue_from_page(lock_t *in_lock, bool use_fcfs) {
+  // 首先先将这个record lock 从lock_sys中标记删除, 从table 的n_rec_locks 中删除
   lock_rec_discard(in_lock);
+  // 然后将这个lock 释放给等待这个lock 的trx
   lock_rec_grant(in_lock, use_fcfs);
 }
 
@@ -4175,6 +4188,8 @@ static void lock_table_dequeue(
 
   lock_t *lock = UT_LIST_GET_NEXT(tab_lock.locks, in_lock);
 
+  // 和 record lock 一样, 先将table lock 删除
+  // 删除操作包括
   lock_table_remove_low(in_lock);
 
   // According to lock_compatibility_matrix, an intention lock can block only
@@ -4198,6 +4213,9 @@ static void lock_table_dequeue(
        lock = UT_LIST_GET_NEXT(tab_lock.locks, lock)) {
     if (lock_get_wait(lock) && !lock_table_has_to_wait_in_queue(lock)) {
       /* Grant the lock */
+      // 这里前面lock_table_remove_low已经把in_lock 给删除了,
+      // 然后判断在已经把in_lock 删除以后, 这个table 里面的lock
+      // 是否还在等待其他的lock, 如果没有等待, 那么就把这个锁给这个lock
       ut_ad(in_lock->trx != lock->trx);
       lock_grant(lock);
     }
@@ -4469,9 +4487,11 @@ static void lock_release(trx_t *trx) {
 
   lock_mutex_enter();
 
+  // 在 lock_release() 函数里面要把这个trx 所拥有的lock 都release
   for (lock = UT_LIST_GET_LAST(trx->lock.trx_locks); lock != NULL;
        lock = UT_LIST_GET_LAST(trx->lock.trx_locks)) {
     if (lock_get_type_low(lock) == LOCK_REC) {
+      // 将lock 从队列中释放
       lock_rec_dequeue_from_page(lock, false);
     } else {
       lock_table_dequeue(lock);
@@ -4794,6 +4814,7 @@ static void lock_rec_print(FILE *file,         /*!< in: file where to print */
 
   block = buf_page_try_get(page_id_t(space, page_no), &mtr);
 
+  // 这里将该page lock 的n_lock bitmap 进行遍历
   for (ulint i = 0; i < lock_rec_get_n_bits(lock); ++i) {
     if (!lock_rec_get_nth_bit(lock, i)) {
       continue;
@@ -4804,6 +4825,7 @@ static void lock_rec_print(FILE *file,         /*!< in: file where to print */
     if (block) {
       const rec_t *rec;
 
+      // 根据heap_no 去获得这个record
       rec = page_find_rec_with_heap_no(buf_block_get_frame(block), i);
 
       offsets =

@@ -2473,8 +2473,11 @@ const rec_t *page_find_rec_with_heap_no(
       rec = page + rec_get_next_offs(rec, TRUE);
     }
   } else {
+    // 先获得最小的record
     rec = page + PAGE_OLD_INFIMUM;
 
+    // 因为record 在内存里面是有序的, 因此遍历直到找到head_no
+    // 然后返回rec, 如果这个heap_no 是SUPREMUM, 那么就返回NULL
     for (;;) {
       ulint rec_heap_no = rec_get_heap_no_old(rec);
 
@@ -2484,6 +2487,10 @@ const rec_t *page_find_rec_with_heap_no(
         return (NULL);
       }
 
+      // 这里找下一个record 也很简单, rec_get_next_offs 返回的就是下一个record
+      // 的offset, 那么page+offset 就是新的record 的位置
+      // 所以在物理page 上, record 的next 指向的就是下一个record 的在page
+      // 上的位置, 也就是从磁盘读取到内存中也不需要经过一次排序的
       rec = page + rec_get_next_offs(rec, FALSE);
     }
   }

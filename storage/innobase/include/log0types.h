@@ -514,6 +514,7 @@ struct alignas(INNOBASE_CACHE_LINE_SIZE) log_t {
   // sn_capacity 指的是当前redo log 系统还能存储的最大的数据大小,
   // 这个值在写入的时候在减少, 在做checkpoint, 把旧数据flush 下去以后会增加, 不包括
   // header, footer 等信息
+  // 为了防止并发占用的额外redo log 空间, 还会额外减去很小一部分大小, 在 log_calc_max_ages() 中
   /** Capacity of the log files available for log_free_check(). */
   lsn_t lsn_capacity_for_free_check;
 

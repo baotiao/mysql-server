@@ -120,6 +120,7 @@ struct page_cleaner_slot_t {
                               n_flushed_lru and n_flushed_list can be
                               updated only by the worker thread */
   /* This value is set during state==PAGE_CLEANER_STATE_NONE */
+  // 当前slot 要flush 的page 个数
   ulint n_pages_requested;
   /*!< number of requested pages
   for the slot */
@@ -164,7 +165,10 @@ struct page_cleaner_t {
   // 这个lsn 设置的是当前redo log 已经写的最大的lsn
   lsn_t lsn_limit;          /*!< upper limit of LSN to be
                             flushed */
+  // 一般n_slots 直接和 buffer pool 的个数是相等的, 所以就有唯一的page cleaner
+  // worker 来进行flush
   ulint n_slots;            /*!< total number of slots */
+
   ulint n_slots_requested;
   /*!< number of slots
   in the state
@@ -181,6 +185,7 @@ struct page_cleaner_t {
                               requests for all slots */
   ulint flush_pass;           /*!< count to finish to flush
                               requests for all slots */
+  // 这个slots 的个数就是上面的 n_slots, 和buffer pool instance 个数是相等的
   page_cleaner_slot_t *slots; /*!< pointer to the slots */
   bool is_running;            /*!< false if attempt
                               to shutdown */
@@ -2354,6 +2359,8 @@ static ulint af_get_pct_for_dirty() {
 
 /** Calculates if flushing is required based on redo generation rate.
  @return percent of io_capacity to flush to manage redo space */
+// age = cur_lsn > oldest_lsn ? cur_lsn - oldest_lsn : 0;
+// age 是两次page flush 之间改动的lsn 的大小
 static ulint af_get_pct_for_lsn(lsn_t age) /*!< in: current age of LSN. */
 {
   const lsn_t log_margin =
@@ -2364,8 +2371,12 @@ static ulint af_get_pct_for_lsn(lsn_t age) /*!< in: current age of LSN. */
   const lsn_t log_capacity = log_sys->lsn_capacity_for_free_check - log_margin;
 
   lsn_t lsn_age_factor;
+  // af_lwm 表示当前redo log free 空间 * 0.1
+  // srv_adaptive_flushing_lwm 默认= 10
   lsn_t af_lwm = (srv_adaptive_flushing_lwm * log_capacity) / 100;
 
+  // age 是这一次计算要flush 多少page 的时候, 目前还有多少page 还没有flush
+  // 的lsn 大小
   if (age < af_lwm) {
     /* No adaptive flushing. */
     return (0);
@@ -2375,11 +2386,30 @@ static ulint af_get_pct_for_lsn(lsn_t age) /*!< in: current age of LSN. */
   ut_a(limit_for_age >= log_margin);
   limit_for_age -= log_margin;
 
+  // limit_for_age 是modified_age_async, 这个值
+  // max_modified_age_async = 7/8 * limit
+  // log.max_modified_age_async = limit - limit / LOG_POOL_PREFLUSH_RATIO_ASYNC;
+  // 
+  // age 是目前还有多少未flush lsn 大小, 如果< 7/8 redo log free space
+  // 并且没有开启adaptive_flushing
+  // 那么这次就不进行flush
+  //
+  // 这里还可以关注一下
+  //   log.max_modified_age_sync = limit - limit / LOG_POOL_PREFLUSH_RATIO_SYNC;
+  //   max_modified_age_sync  同步的modified_age = 15/16 * limit 
+  // 
+  // 可以看到 同步max_modified_age_sync > 异步 max_modified_age_async
+  // 这里age 如果 > limit_for_age  也就是这次改动的内容超过free redo log 的7/8
+  // 那么就只剩下1/8 的free redo log了, 那么肯定要做page flush 了
+  // 如果还没做, 就到了log_checkpoint 里面做同步的 page flush 了
   if (age < limit_for_age && !srv_adaptive_flushing) {
     /* We have still not reached the max_async point and
     the user has disabled adaptive flushing. */
     return (0);
   }
+
+  // 到了这里, 要么打开了 adaptive_flushing
+  // 要么修改的page 超过了 max_modified_age_async
 
   /* If we are here then we know that either:
   1) User has enabled adaptive flushing
@@ -2444,13 +2474,21 @@ static ulint page_cleaner_flush_pages_recommendation(lsn_t *lsn_limit,
       time_elapsed = 1;
     }
 
+    // avg_loops = 30, 也就是每30次page_cleaner_flush_pages_recommendation更新一次统计信息
+    // 统计这段时间产生page 的速率
+    // sum_page 是time_elapsed 这段时间产生的page 数
+    // sum_page / time_elapsed 是这段时间产生page 速率
+    // avg_page_rate 是上一次计算是产生的page_rate
+    // 然后将他们/2  约表示这个值的平均
     avg_page_rate = static_cast<ulint>(
         ((static_cast<double>(sum_pages) / time_elapsed) + avg_page_rate) / 2);
 
+    // 统计这段时间redo log lsn 生成的速率
     /* How much LSN we have generated since last call. */
     lsn_rate = static_cast<lsn_t>(static_cast<double>(cur_lsn - prev_lsn) /
                                   time_elapsed);
 
+    // 与上一次计算产生的lsn_rate /2 进行平均
     lsn_avg_rate = (lsn_avg_rate + lsn_rate) / 2;
 
     /* aggregate stats of all slots */
@@ -2539,13 +2577,27 @@ static ulint page_cleaner_flush_pages_recommendation(lsn_t *lsn_limit,
 
   age = cur_lsn > oldest_lsn ? cur_lsn - oldest_lsn : 0;
 
+  // 计算目前dirty page 百分比
   pct_for_dirty = af_get_pct_for_dirty();
+  // 计算目前redo log 中dirty log 百分比
   pct_for_lsn = af_get_pct_for_lsn(age);
 
+  // 那么真实的要刷脏的百分比是这两个百分比中大的那个
   pct_total = ut_max(pct_for_dirty, pct_for_lsn);
 
+  // 估算基于日志的flushing 产生的page 数,
+  // 用在最后实际计算flush n_pages 的时候做平均
+  //
+  // 这里buf_flush_lsn_scan_factor = 3, 为什么是3呢?
+  // 感觉是根据经验拍出来的一个值
   /* Estimate pages to be flushed for the lsn progress */
   ulint sum_pages_for_lsn = 0;
+  // 根据 redo lsn 产生的速度lsn_avg_rate, 计算出这样的redo
+  // 产生速度会有多少个page 会flush.
+  // 所以接下来就是先计算出 target_lsn, 然后遍历buffer pool 找出小于target_lsn
+  // 的page 有多少
+  // 那么 sum_pages_for_lsn 表示的是根据redo lsn 产生的速度, 这次可能涉及到的
+  // 需要flush 的page 有多少个
   lsn_t target_lsn = oldest_lsn + lsn_avg_rate * buf_flush_lsn_scan_factor;
 
   for (ulint i = 0; i < srv_buf_pool_instances; i++) {
@@ -2566,6 +2618,8 @@ static ulint page_cleaner_flush_pages_recommendation(lsn_t *lsn_limit,
 
     mutex_enter(&page_cleaner->mutex);
     ut_ad(page_cleaner->slots[i].state == PAGE_CLEANER_STATE_NONE);
+    // 根据上面计算的要flush page 个数, 这里并不是要flush 所有page,
+    // 而是本次要flush 到的lsn. 来计算这一次这个buf_pool 要flush 的page 个数
     page_cleaner->slots[i].n_pages_requested =
         pages_for_lsn / buf_flush_lsn_scan_factor + 1;
     mutex_exit(&page_cleaner->mutex);
@@ -2581,8 +2635,16 @@ static ulint page_cleaner_flush_pages_recommendation(lsn_t *lsn_limit,
   ulint pages_for_lsn =
       std::min<ulint>(sum_pages_for_lsn, srv_max_io_capacity * 2);
 
+  // PCT_IO 是占用srv_io_capacity 的百分比
+  // 这里除以3 的做法是除以3srv_io_capacity 的百分比
+  // 这里除以3 是因为是3个 计算方法的平均值
+  // PCT_IO(pct_total): 表示的是脏页/日志空间占用的百分比
+  // avg_page_rate: 表示的是产生page 的平均速度
+  // pages_for_lsn: 表示的是redo log 产生的而引起脏页page 数
   n_pages = (PCT_IO(pct_total) + avg_page_rate + pages_for_lsn) / 3;
 
+  // 这里依然会最后用 srv_max_io_capacity 做最后的过滤, 超过srv_max_io_capacity
+  // 就将他限制一下
   if (n_pages > srv_max_io_capacity) {
     n_pages = srv_max_io_capacity;
   }
@@ -2593,6 +2655,7 @@ static ulint page_cleaner_flush_pages_recommendation(lsn_t *lsn_limit,
   ut_ad(page_cleaner->n_slots_flushing == 0);
   ut_ad(page_cleaner->n_slots_finished == 0);
 
+  // 然后把这个要刷脏的n_pages 分给各个buffer pool
   for (ulint i = 0; i < srv_buf_pool_instances; i++) {
     /* if REDO has enough of free space,
     don't care about age distribution of pages */
@@ -3106,35 +3169,68 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
     /* The page_cleaner skips sleep if the server is
     idle and there are no pending IOs in the buffer pool
     and there is work to do. */
+    // 这里如果是系统比较idle, 或者在buffer pool 里面没有pending IO
+    // 那么page cleaner 就开始起来活动了, 说明page flush
+    // 会做到尽可能的不去影响业务正常的访问
+    //
+    // n_flushed 记录的是上一次已经flush 的page 数, 如果==0 说明上一次没有flush
+    // 下去page, 说明没有脏页, 因此可以sleep 一下, 
     if (srv_check_activity(last_activity) || buf_get_n_pending_read_ios() ||
         n_flushed == 0) {
       // 我们一般会将 next_loop_time = curr_time + 1000;
       // 也就是当前time 过去1s 以后, 就是下一次要执行的time
+      //
+      // 进入到这个branch 说明系统有访问, 并且buffer pool 有读IO 正在等待,
+      // 那么就让page flush 继续等待, 但是如果超过了 next_loop_time,
+      // 也就是距离上一次page flush 超过1s, 那么就唤醒
       ret_sleep = pc_sleep_if_needed(next_loop_time, sig_count);
 
       if (srv_shutdown_state.load() != SRV_SHUTDOWN_NONE) {
         break;
       }
     } else if (ut_time_monotonic_ms() > next_loop_time) {
-      // 这个branch 是如果现在的时间已经超过的上次设定的这次要执行的时间
+      // 这个branch 是现在系统处于idle 状态, 并且现在的时间已经超过的上次设定的这次要执行的时间
       // 那么开始执行page clean 操作
       ret_sleep = OS_SYNC_TIME_EXCEEDED;
     } else {
+      // 这个branch 表示系统处于idle, 并且还没到上次设定的时间, 也继续执行page
+      // clean
       ret_sleep = 0;
     }
 
     sig_count = os_event_reset(buf_flush_event);
 
-    // 从sleep 从返回了, 要执行page clean 任务了
+    // 上面if, else 的第二种情况
+    // 系统处于idle 状态, 并且执行时间已经超过了上次设定的时间, 说明上次的page
+    // flush 执行了很长时间, 这个时候要打印一下日志, 大部分情况是这个时候IO
+    // 有问题, 上一次IO 有问题了.
     if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
       const auto curr_time = ut_time_monotonic_ms();
 
+      // 现在的时间 next_loop_time + 3s
+      // 在上一次 next_loop_time = cur_time + 1s
       if (curr_time > next_loop_time + 3000) {
+        // 打印page cleaner took 的频率, 避免每一次page flush 慢了就打日志
+        // 这里 warn_interval 是按照2指数增长的
+        // 所以结果是
+        // 第一个page cleaner flush 超时打日志, warn_count = 2;
+        // 第二次不打 warn_count = 1;
+        // 第3次warn_count -- 两次了, 打, 此时warn_count = 0,
+        // 执行完成后warn_count = 4;
+        // 4 不打 warn_count = 4
+        // 5 不打 warn_count = 3
+        // 6 不打 warn_count = 2;
+        // 7 不打 warn_count = 1;
+        // 8 打 warn_count = 0, 打印完日志以后 warn_count = 8;
+        //
+        // 所以打印page cleaner 慢日志是越来越慢的
         if (warn_count == 0) {
           ulint us;
 
+          // 距离上一次page flush 过了多长时间
           us = 1000 + curr_time - next_loop_time;
 
+          // 记录日志, 表示上一次flush n_flushed_last page数花费了多长时间
           ib::info(ER_IB_MSG_128)
               << "Page cleaner took " << us << "ms to flush " << n_flushed_last
               << " and evict " << n_evicted << " pages";
@@ -3159,6 +3255,7 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
       n_flushed_last = n_evicted = 0;
     }
 
+    // 如果buf_flush_sync_lsn > 0. 则就需要进行同步flush 了
     if (ret_sleep != OS_SYNC_TIME_EXCEEDED && srv_flush_sync &&
         buf_flush_sync_lsn > 0) {
       /* woke up for flush_sync */
@@ -3197,6 +3294,7 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
       n_flushed = n_flushed_lru + n_flushed_list;
 
     } else if (srv_check_activity(last_activity)) {
+      // 最经常走的逻辑
       ulint n_to_flush;
       lsn_t lsn_limit = 0;
 
@@ -3256,6 +3354,8 @@ static void buf_flush_page_coordinator_thread(size_t n_page_cleaners) {
       }
 
     } else if (ret_sleep == OS_SYNC_TIME_EXCEEDED) {
+      // 如果这个时候系统没有压力, 则马力全开, 使用io_capacity 100%
+      // 的能力进行刷脏
       /* no activity, slept enough */
       buf_flush_lists(PCT_IO(100), LSN_MAX, &n_flushed);
 
@@ -3438,11 +3538,14 @@ void buf_flush_sync_all_buf_pools(void) {
 void buf_flush_request_force(lsn_t lsn_limit) {
   ut_a(buf_flush_page_cleaner_is_active());
 
+  // 上层调用这里, 再额外加上 lsn_avg_rate * 倍, 让flush 的更多的page
   /* adjust based on lsn_avg_rate not to get old */
   lsn_t lsn_target = lsn_limit + lsn_avg_rate * 3;
 
   mutex_enter(&page_cleaner->mutex);
   if (lsn_target > buf_flush_sync_lsn) {
+    // 因为设置了 buf_flush_sync_lsn 因此接下来的刷脏操作就是force 的刷脏
+    // force 刷脏的刷脏大小是不受 srv_io_max_capacity 限制
     buf_flush_sync_lsn = lsn_target;
   }
   mutex_exit(&page_cleaner->mutex);

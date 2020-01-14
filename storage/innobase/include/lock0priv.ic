@@ -227,8 +227,16 @@ bool lock_rec_get_nth_bit(const lock_t *lock, ulint i) {
     return (false);
   }
 
+  // 比如传进来 i = 12;
+  // 那么这里就到了 Lock[1] + 1 也就是lock[2] 的位置
   b = ((const byte *)&lock[1]) + (i / 8);
 
+  // i % 8 = 12 % 8 = 4
+  // *b 也就是lock[2] >> 4
+  // 那么true & (*b >> 4) 也就是找这个bit 对应的值
+  //
+  // 比如 n_bits = 144 = 10010000
+  // 那么就是第4, 7 record 是Lock, 其实是非lock 的
   return (true & *b >> (i % 8));
 }
 

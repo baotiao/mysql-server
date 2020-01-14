@@ -51,6 +51,7 @@ those functions in lock/ */
 struct lock_table_t {
   dict_table_t *table; /*!< database table in dictionary
                        cache */
+  // 我们所说的等待队列, 在table lock 里面就是持有这个table 的所有lock
   UT_LIST_NODE_T(lock_t)
   locks; /*!< list of locks on the same
          table */
@@ -1140,6 +1141,7 @@ struct Lock_iter {
   @param[in]	f		Function to call for each entry
   @param[in]	hash_table	The hash table to iterate over
   @return lock where the callback returned false */
+  // 这里for_each 的时候在first, advance 函
   template <typename F>
   static const lock_t *for_each(const RecID &rec_id, F &&f,
                                 hash_table_t *hash_table = lock_sys->rec_hash) {

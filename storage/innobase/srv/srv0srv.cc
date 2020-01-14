@@ -430,6 +430,10 @@ enum srv_win_flush_t srv_win_file_flush_method = SRV_WIN_IO_UNBUFFERED;
 ulint srv_max_n_open_files = 300;
 
 /* Number of IO operations per second the server can do */
+// 这里io_capacity 指的是后台flush page io 个数
+// 所以具体产生的io 要* 16
+// srv_io_capacity 产生的IO 大小是 3200kb/s
+// srv_max_io_capacity 产生的IO 大小是6400kb/s
 ulong srv_io_capacity = 200;
 ulong srv_max_io_capacity = 400;
 

@@ -2991,7 +2991,9 @@ void srv_purge_coordinator_thread() {
   rw_lock_x_unlock(&purge_sys->latch);
 
   // srv_sys->sys_threads 管理者InnoDB 所有的thread
-  // 这里从sys_threads 找到一个slot, 并标记这个thread 正在运行
+  //
+  // slot = &srv_sys->sys_threads[SRV_PURGE_SLOT];
+  // purge 线程在数组[SRV_PURGE_SLOT] 这个位置
   slot = srv_reserve_slot(SRV_PURGE);
 
   // 获得当前trx sys 的 undo log history list 长度

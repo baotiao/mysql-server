@@ -410,6 +410,7 @@ void lock_reset_wait_and_release_thread_if_suspended(lock_t *lock) {
 
   /* Reset the wait flag and the back pointer to lock in trx */
 
+  // 因为所等待的lock 已经放开, 那么将这个lock->wait_lock 设置成NULL
   lock_reset_lock_and_trx_wait(lock);
 
   /* If we are resolving a deadlock by choosing another transaction

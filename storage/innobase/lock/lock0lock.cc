@@ -1416,6 +1416,9 @@ static void lock_update_trx_age(trx_t *trx, int32_t age) {
 record lock is created.
 @param[in,out]	new_lock	The lock that was just created
 @param[in]	heap_no		The heap number of the lock in the page */
+// 使用cats 算法的时候, 当新加入一个 record 的时候, 如果这个Lock
+// 在等待其他的lock, 那么需要把这个等待其他lock->age 进行+1 操作.
+// 表示这个被等待的Lock 的权重有变重了
 static void lock_update_age(lock_t *new_lock, ulint heap_no) {
   ut_ad(lock_mutex_own());
 
@@ -1435,10 +1438,19 @@ static void lock_update_age(lock_t *new_lock, ulint heap_no) {
   RecID rec_id{space, page_no, heap_no};
   const auto wait = lock_get_wait(new_lock);
 
+  // 这里for_each 遍历的是当前lock_sys->rec_hash 上面的相同的{space_id, page_no,
+  // heap_no} 的lock, 因为相同的{space_id, page_no, heap_no} 可能是不同的 X, SX,
+  // S 类型的lock
   Lock_iter::for_each(rec_id, [&](const lock_t *lock) {
+    // 这里for_each 执行出来以后, 是所有和new_lock 一个{space_id, page_no,
+    // heap_no} 的lock
     const auto trx = lock->trx;
 
+    // 如果要加入的new_lock 所属的trx != 遍历的这个Lock 所属的trx
     if (new_lock->trx != trx) {
+      // 如果当前这个new_lock 要wait, 那么就把这个lock 加入到要wait 的trxs里面
+      // 否则根据cats 算法, 要对遍历的lock 的trx->age 权重+1, 表示这个lock
+      // 有了更多的 lock 在等待他, 因此需要增加他的权重
       if (wait) {
         if (!lock->is_waiting() && !lock_use_fcfs(lock) &&
             trx->state == TRX_STATE_ACTIVE) {
@@ -1455,6 +1467,7 @@ static void lock_update_age(lock_t *new_lock, ulint heap_no) {
 
   ++lock_sys->mark_age_updated;
 
+  // 如果新加进来的Lock 的状态是wait, 则把
   if (wait) {
     for (auto trx : trxs) {
       lock_update_trx_age(trx, new_lock->trx->age + 1);
@@ -1501,6 +1514,7 @@ void RecLock::lock_add(lock_t *lock, bool add_to_hash) {
   UT_LIST_ADD_LAST(lock->trx->lock.trx_locks, lock);
 
   if (wait) {
+    // 一个 trx 里面只要有一个lock 是wait, 那么就把这个trx 的状态设置成wait
     lock_set_lock_and_trx_wait(lock);
   } else {
     lock_update_age(lock, lock_rec_find_set_bit(lock));
@@ -1574,6 +1588,7 @@ dberr_t RecLock::check_deadlock_result(const trx_t *victim_trx, lock_t *lock) {
   ut_ad(m_trx == lock->trx);
   ut_ad(trx_mutex_own(m_trx));
 
+  // 如果当前trx 被选中成为 victim_trx
   if (victim_trx != NULL) {
     ut_ad(victim_trx == m_trx);
 
@@ -1584,6 +1599,7 @@ dberr_t RecLock::check_deadlock_result(const trx_t *victim_trx, lock_t *lock) {
     return (DB_DEADLOCK);
 
   } else if (m_trx->lock.wait_lock == NULL) {
+    // 如果选择了其他trx 作为 victim_trx
     /* If there was a deadlock but we chose another
     transaction as a victim, it is possible that we
     already have the lock now granted! */
@@ -2002,7 +2018,7 @@ static dberr_t lock_rec_lock_slow(ibool impl, select_mode sel_mode, ulint mode,
 
   } else {
     // 检查是否和已有的Lock 有冲突
-    // 如果有冲突并且sle_mode 是ORDINARY, 那么就需要进入到add_to_waitq
+    // 如果有冲突并且sel_mode 是ORDINARY, 那么就需要进入到add_to_waitq
     // 里面等待这个Lock
     //
     // 在add_to_waitq 里面会进行死锁检查 deadlock_check()
@@ -2636,7 +2652,10 @@ static void lock_rec_grant(lock_t *in_lock, bool use_fcfs) {
       if (lock->is_waiting() && !lock_rec_has_to_wait_in_queue(lock)) {
         /* Grant the lock */
         ut_ad(lock->trx != in_lock->trx);
-        // 将lock 给等待这个lock 的trx
+        // 注意: 到这里的lock 和 in_lock 就不是一个lock 了, in_lock 是已经释放的lock
+        // lock 是这些和in_lock 冲突的正在waiting 的 lock
+        // in_lock 释放了, 那么这些waiting 的lock 对应的trx 就可以被唤醒执行了
+        //
         // 那么这个trx 就从waiting => running
         lock_grant(lock);
       }
@@ -4456,6 +4475,10 @@ void lock_trx_release_read_locks(trx_t *trx, bool only_gap) {
 /** Releases transaction locks, and releases possible other transactions waiting
  because of these locks.
 @param[in,out]  trx   transaction */
+// 这trx 所持有的所有lock 都释放, 如果有其他trx 等待在这个trx 的Lock 上,
+// 那么会唤醒其他的trx
+//
+// 一般是事务提交了以后, 才会把对应的lock release
 static void lock_release(trx_t *trx) {
   lock_t *lock;
 
@@ -6850,6 +6873,7 @@ const lock_t *DeadlockChecker::get_next_lock(const lock_t *lock,
   do {
     if (lock_get_type_low(lock) == LOCK_REC) {
       ut_ad(heap_no != ULINT_UNDEFINED);
+      // 返回改heap_no 上面的lock_t
       lock = lock_rec_get_next_const(heap_no, lock);
     } else {
       ut_ad(heap_no == ULINT_UNDEFINED);
@@ -7053,6 +7077,17 @@ bool DeadlockChecker::is_allowed_to_be_on_cycle(const lock_t *lock) {
 /** Looks iteratively for a deadlock. Note: the joining transaction may
 have been granted its lock by the deadlock checks.
 @return 0 if no deadlock else the victim transaction instance.*/
+// 所以lock_rec_other_has_conflicting  
+// 做的事情是判断要申请的这个lock 是否和其他lock 有冲突, 
+// 如果有冲突则不一定能加入到等待队列里面, 因为如果随意加入到等待队列里面, 
+// 会造成死锁, 因为当前这个trx 可能已经持有其他lock, 等待的wait_lock.  
+// 然后有trx1 持有了trx->wait_lock, 但是却在等待trx->lock. 
+// 因为即使加入到等待队列也不是所有lock 都能加入到等待队列, 
+// 需要确保加入到等待队列不会造成死锁, 才可以加入到等待队列.
+
+// 因此Deadlock_check 的过程就是假设已经获得了wait_lock, 
+// 这个等待队列里面有没有可能有死锁.
+
 const trx_t *DeadlockChecker::search() {
   ut_ad(lock_mutex_own());
   ut_ad(!trx_mutex_own(m_start));
@@ -7064,6 +7099,18 @@ const trx_t *DeadlockChecker::search() {
 
   /* Look at the locks ahead of wait_lock in the lock queue. */
   ulint heap_no;
+  // 在lock_t 的实现中, 为何可以根据当前的lock 就可以找到下一个相同heap_no
+  // 的Lock 这个是记录在哪里?
+  //   /** Hash chain node for a record lock. The link node in a singly
+  //   linked list, used by the hash table. */
+  //   lock_t *hash;
+  // 在loct_t 里面有一个 lock_t *hash 指针, 指向了在这个hash_table
+  // 相同的slot 上面下一个lock_t 的位置
+  //
+  // 这里这个hash_table 会保证相同的 key 的元素是连续的么? 
+  // 如果不能保证, 这里其实是会有性能损失的, 因为不同的key 可能落到了同一个slot
+  // 上, 但是deadlock 使用到的场景是要遍历相同的key,
+  // 这样就必须跳过不同key 的item
   const lock_t *lock = get_first_lock(&heap_no);
 
   /*
@@ -7075,32 +7122,63 @@ const trx_t *DeadlockChecker::search() {
    * 可能被多个地方持有, 比如你的wait_lock 可能是12 record 上的lock_X,
    * 但是这个时候你需要遍历的却是12 record 上面所有的lock, 因为有可能12 record
    * 上面的lock_S 被多个trx 持有的, 这个正常的, 那么就需要遍历lock_X
-   * 和所有lock_S trx 的可能, 所以这个时候新的x lock 其实适合所有拥有12 record
-   * 的s lock 都需要连一条边, 那么回溯的时候就是尝试了其中一个lock_S 后,
+   * 和所有lock_S trx 的可能, 所以这个时候trx 其实是和所有拥有12 record
+   * 的s lock trx都需要连一条边, 那么回溯的时候就是尝试了其中一个lock_S 后,
    * 发现没有环, 那么再去尝试另外一个lock_S. 所以这里主要的get_next_lock
    * 就是下一个用于lock_S 的lock
    *
+   * 典型的场景: 比如很多trx 都拥有record 的s lock, 然后这个时候trx1
+   * 进来, 要一个这个record 的x lock, 那么就需要遍历了
+   *
    * 当然, 也有可能存在一个trx 拥有record 的 record not gap, 一个trx 用于record
    * 的gap lock 这种场景, 也在get_next_lock 里面遍历
+   *
+   * 总之: get_next_lock 用于遍历这个{space id, page, heap_no}上面的所有的loct_t 结构体,
+   * 一个record 可能存在非常多的lock_t 结构体在上面, 因为不同的trx
+   * 都持有相同一个record 的S lock
    */
+      
   for (;;) {
     /* We should never visit the same sub-tree more than once. */
     // 这里is_visited 用的是一个全局的版本号标记, 然后deadlockchecker
     // 用的也是一个全局的版本号, 如果这个trx 被访问过, 那么就把这个版本号更新,
     // 那么是否在这次deadlockchecker 访问过, 只要检查一下trx->lock.deadlock_mark
     // 和 m_mark_start 的比较就可以了
+    //
+    // 这个是写dfs 常见的方法, 避免已经节点被访问多次. 正常情况下直接用is_visit
+    // = true/false 就可以了, 但是这种做法在直接完成这一次以后, 就
+    // 需要把所有已经遍历过的trx is_visit = false, 否则下一次的遍历就是有问题的
+    // m_mark_start 是deadlock 启动时设置 
+    // lock->trx->lock.deadlock_mark > m_mark_start
     ut_ad(lock == NULL || !is_visited(lock));
 
     while (m_n_elems > 0 && lock == NULL) {
       /* Restore previous search state. */
       pop(lock, heap_no);
 
+      // 这里为什么需要 get_next_lock?
+      // 本质原因是wait_lock 如果是x lock, 是和N 个s lock 冲突, 这个N
+      // 个s lock 持有的trx 都是不一样的, 所以DFS 的时候遍历完一个s lock,
+      // 就遍历下一个s lock
+      // 同样, 这里再往stack push 的时候push 进来的是这个page.heap_no,
+      // 但是一个page.heap_no 可能就包含了多个s lock, 因此这里其实是一个lock
+      // 可能关联了多个trx, get_next_lock 就是这一个trx 是正常的,
+      // 那么遍历拥有这个s lock 的下一个trx 了
+      // https://i.imgur.com/CNzWrdK.png
+      // 比如在上面这个图里面 Trx1 持有 lock 5 S lock, 15 X lock, 22 S lock.  等待wait_lock 21 X lock
+      // 这里21 S lock 已经被 Trx2, Trx3, Trx4 持有, 因此这里Trx1 需要分别和 Trx2, Trx3, Trx4
+      // 还可以看到 Trx2 wait 32 X lock 但是被 Trx7, Trx5 持有32 S lock, 因此也在wait.
+      // 而Trx4, Trx5 都在wait 16 S lock, 但是16 X lock 在Trx6 上面持有, 因此Trx4, Trx5 都需要想Trx 6 连一条边
+
+      // **一个trx 的wait_lock 只会有一个**
       lock = get_next_lock(lock, heap_no);
     }
 
     if (lock == NULL) {
       break;
     } else if (lock == m_wait_lock) {
+      // 这个branch 场景是
+      // 要找到lock 已经找到, 比如这个
       /* We can mark this subtree as searched */
       ut_ad(lock->trx->lock.deadlock_mark <= m_mark_start);
 
@@ -7116,24 +7194,12 @@ const trx_t *DeadlockChecker::search() {
       lock = NULL;
 
     } else if (!lock_has_to_wait(m_wait_lock, lock)) {
-      // 这里死锁检测的过程是这样
-      // trx1 有一个想要加的lock, 那么这个lock 进入DeadlockChecker 的时候就变成
-      // wait_lock
-      // 那么怎么判断这个wait_lock 是否能够获得呢? 
-      // 如果这个wait_lock 和目前所有的lock 都没有冲突,
-      // 那么可以马上获得这个lock, 
-      // 如何判断是否有冲突? 
-      // 只需要判断在rec_hash 有没有和这个lock 同一space, page 的lock,
-      // 然后判断这个旧lock 和 wait_lock 是否有冲突, 如果有没有冲突,
-      // 那么就跳过了, 如果有冲突, 那么判断一下拥有旧lock 的trx 是否在wait 状态
-      // 如果在, 那么就到这个旧trx 上进行遍历 它正在等的lock
+      // 这个branch 场景是
+      // 这里m_wait_lock 的是record s lock, 那么遍历的的时候需要遍历这个record
+      // 所有lock, 这里遍历到的也是 s lock, 那么就不冲突, 那么就直接跳过. 碰到x
+      // lock 才是有冲突.
       //
-      // 这里要进行遍历的地方在于, 判断在rec_hash 有没有和这个lock 同一space,
-      // page 的Lock 的时候, 可以存在多个, 那么对应的这个trx1
-      // 就和多个trx进行连边, 进而就需要遍历了.
-      //
-      // 典型的场景: 比如大家一开始都拥有一个record 的s lock, 然后这个时候trx1
-      // 进来, 要一个这个record 的x lock, 那么就需要遍历了
+      // 因此就跳过这个lock, 也就是跳过这个trx, 直接找下一个trx
       /* No conflict, next lock */
       lock = get_next_lock(lock, heap_no);
 
@@ -7154,40 +7220,49 @@ const trx_t *DeadlockChecker::search() {
       m_too_deep = true;
       return (m_start);
     } else if (lock->trx_que_state() == TRX_QUE_LOCK_WAIT) {
-      // 这个branch 是常见的逻辑
-      // 也就是当前trx 等待的这个lock 所在的TRX1 也处在wait 状态
-      // 那么就需要看这个TRX1 等待的lock 是哪一个
-      // 因为这里lock.wait_lock 是有多个, 所以就变成一个图了
+      // 这个branch 场景是
+      // 想要加的这个m_wait_lock 确实和这个record 上其他lock 有冲突(上面branch
+      // 已经判断过没有冲突的情况了), 并且持有这个lock 的trx1 也处于等待状态,
+      // 那么就得递归到trx1 中去处理了
+      // 所以接下来dfs 的操作就是把这个lock push 到stack
+      // 然后设置 m_wait_lock 为当前这个trx1 的wait_lock
+      //
+      // m_wait_lock = lock->trx->lock.wait_lock;
+      //
+      // m_cost 专门记录了遍历了多少个trx
       /* Another trx ahead has requested a lock in an
       incompatible mode, and is itself waiting for a lock. */
-
       ++m_cost;
 
+      // 只是push 了这个heap_no 的Lock, 但是这个lock 可能被多个Trx 持有,
+      // 所以也可以理解push 进去的时候是push 一堆lock, 但是pop
+      // 出来处理的时候是一个一个处理的
+      // 典型的场景: 比如很多trx 都拥有record 的s lock, 然后这个时候trx1
+      // 进来, 要一个这个record 的x lock, 那么这里push 进去的时候就是一堆的
+      // s lock 了
       if (!push(lock, heap_no)) {
         m_too_deep = true;
         return (m_start);
       }
 
-      // wait_lock 虽然只是一个Lock, 但是找这个wait lock 的时候
-      // 是判断所有和这个lock 冲突的lock
-      // 
-      // 一开始想的不对, 以为wait_lock 就是要获得这个wait_lock, 其实不是.
-      // wait_lock 是当前trx 想要获得的lock, 死锁检测做的就是如果这个trx 有了这个lock
-      // 是否会造成死锁. 
-      // 所以判断的过程wait_lock 需要和其他的trx 的lock 是否有冲突, 因为InnoDB
-      // 的lock 都set 在record, 因此只需要判断其他的trx 是否有这个record 的lock,
-      // 在判断这个record 的lock 是否有冲突即可
-      //
      
+      // wait_lock 只是一个lock, 但是这个record 上可能有多个lock 和这个wait lock
+      // 冲突, 典型场景 wait lock 是x lock, 这个record 上已经有多个s lock 了
       m_wait_lock = lock->trx->lock.wait_lock;
 
       lock = get_first_lock(&heap_no);
 
+      // dfs 的时候判断如果这个record 已经
       if (is_visited(lock)) {
         lock = get_next_lock(lock, heap_no);
       }
 
     } else {
+      // 这个branch 的场景是
+      // 想要加的这个m_wait_lock 确实和这个record 上其他lock 有冲突(上面branch
+      // 已经判断过没有冲突的情况了), 但是这个lock 持有者trx1 并不处于wait
+      // 状态(上面已经处理了wait 状态了),
+      // 因此可以直接跳过这个trx1, 处理下一个lock 了
       lock = get_next_lock(lock, heap_no);
     }
   }
@@ -7226,6 +7301,7 @@ void DeadlockChecker::rollback_print(const trx_t *trx, const lock_t *lock) {
 void DeadlockChecker::trx_rollback() {
   ut_ad(lock_mutex_own());
 
+  // m_wait_lock 会随着递归的查找一直记录的是当前最新的要等待的lock
   trx_t *trx = m_wait_lock->trx;
 
   print("*** WE ROLL BACK TRANSACTION (1)\n");
@@ -7310,8 +7386,10 @@ const trx_t *DeadlockChecker::check_and_resolve(const lock_t *lock,
       break;
 
     } else if (victim_trx != NULL && victim_trx != trx) {
+      // 如果找到deadlock, 并且victim_trx 不是当前trx, 是其他的trx
       ut_ad(victim_trx == checker.m_wait_lock->trx);
 
+      // 然后由checker 把其他的trx rollback
       checker.trx_rollback();
 
       lock_deadlock_found = true;

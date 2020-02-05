@@ -111,9 +111,12 @@ struct lock_t {
   /** transaction owning the lock */
   trx_t *trx;
 
+  // trx 的所有lock_t 通过trx_locks 连接到一起
   /** list of the locks of the transaction */
   UT_LIST_NODE_T(lock_t) trx_locks;
 
+  // 这个Lock 所属于的index, 每一个lock 肯定lock 某一个Btree,
+  // 那么就属于某一个index
   /** Index for a record lock */
   dict_index_t *index;
 
@@ -1141,7 +1144,8 @@ struct Lock_iter {
   @param[in]	f		Function to call for each entry
   @param[in]	hash_table	The hash table to iterate over
   @return lock where the callback returned false */
-  // 这里for_each 的时候在first, advance 函
+  // 这里for_each 的时候在first, advance 函数里面会检测heap_no
+  // 保证只会对(space_id, page_no, heap_no) 相同的lock 进行遍历操作
   template <typename F>
   static const lock_t *for_each(const RecID &rec_id, F &&f,
                                 hash_table_t *hash_table = lock_sys->rec_hash) {

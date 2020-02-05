@@ -157,6 +157,9 @@ lock_t *lock_rec_get_next(ulint heap_no, /*!< in: heap number of the record */
 
   do {
     ut_ad(lock_get_type_low(lock) == LOCK_REC);
+    // 获得page 上的下一个lock, 一个page 可能有多个lock, 除了page 可能有多个lock
+    // 的原因, 还有一个heap_no 的s lock 可能被多个trx 持有, 因此可能有多个s lock
+    // 在一个heap_no 上
     lock = lock_rec_get_next_on_page(lock);
   } while (lock != nullptr && !lock_rec_get_nth_bit(lock, heap_no));
 

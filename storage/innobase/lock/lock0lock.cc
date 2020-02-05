@@ -7087,7 +7087,6 @@ have been granted its lock by the deadlock checks.
 
 // 因此Deadlock_check 的过程就是假设已经获得了wait_lock, 
 // 这个等待队列里面有没有可能有死锁.
-
 const trx_t *DeadlockChecker::search() {
   ut_ad(lock_mutex_own());
   ut_ad(!trx_mutex_own(m_start));
@@ -7171,6 +7170,10 @@ const trx_t *DeadlockChecker::search() {
       // 而Trx4, Trx5 都在wait 16 S lock, 但是16 X lock 在Trx6 上面持有, 因此Trx4, Trx5 都需要想Trx 6 连一条边
 
       // **一个trx 的wait_lock 只会有一个**
+      // 这里访问的是DeadlockChecker::get_next_lock() 下面会判断可能这个lock
+      // 已经被访问过了
+      // 为什么有可能被访问过?
+      // dfs 常见问题, 想一下
       lock = get_next_lock(lock, heap_no);
     }
 
@@ -7178,7 +7181,7 @@ const trx_t *DeadlockChecker::search() {
       break;
     } else if (lock == m_wait_lock) {
       // 这个branch 场景是
-      // 要找到lock 已经找到, 比如这个
+      //  
       /* We can mark this subtree as searched */
       ut_ad(lock->trx->lock.deadlock_mark <= m_mark_start);
 
@@ -7365,9 +7368,8 @@ const trx_t *DeadlockChecker::check_and_resolve(const lock_t *lock,
     DeadlockChecker checker(trx, lock, s_lock_mark_counter);
 
     /*
-     * 就是在这个checker.search() 函数里面找出要被victim 的trx
-     * 那么这里search() 是如何找的, 广度优先搜索么? 然后如何
-     * 比较优先级低的事务呢?
+     * 如果找到环, 那么根据 select_victim() 函数找出权重低的作为要victim_trx
+     * 如果dfs 太深, 或者
      */
     victim_trx = checker.search();
 

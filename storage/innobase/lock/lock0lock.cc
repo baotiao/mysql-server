@@ -1737,6 +1737,7 @@ dberr_t RecLock::add_to_waitq(const lock_t *wait_for, const lock_prdt_t *prdt) {
   bool high_priority = trx_is_high_priority(m_trx);
 
   /* Don't queue the lock to hash table, if high priority transaction. */
+  // 在Lock_t 创建的时候, 就加入到lock_t 的hashtable 了
   lock_t *lock = create(m_trx, !high_priority, prdt);
 
   /* Attempt to jump over the low priority waiting locks. */
@@ -7151,6 +7152,13 @@ const trx_t *DeadlockChecker::search() {
     // lock->trx->lock.deadlock_mark > m_mark_start
     ut_ad(lock == NULL || !is_visited(lock));
 
+    // 为什么需要这个while 循环? 正常dfs 只需要执行pop() 就可以
+    // 还是由于这里特殊性, push 的时候只push record
+    // {space_id, page_no, heap_no}, 但是这个record 其实可能包含了多个lock,
+    // 比如多个trx 都持有了这个record s lock, 因此pop 的时候只pop
+    // 其中一个record 其实可能包含了多个lock, 比如多个trx 都持有了这个record s
+    // lock, 因此pop 了一次以后, 接下来一直通过get_next_lock() 把这个record
+    // 上所有的lock 都处理
     while (m_n_elems > 0 && lock == NULL) {
       /* Restore previous search state. */
       pop(lock, heap_no);
@@ -7170,10 +7178,15 @@ const trx_t *DeadlockChecker::search() {
       // 而Trx4, Trx5 都在wait 16 S lock, 但是16 X lock 在Trx6 上面持有, 因此Trx4, Trx5 都需要想Trx 6 连一条边
 
       // **一个trx 的wait_lock 只会有一个**
+      //
       // 这里访问的是DeadlockChecker::get_next_lock() 下面会判断可能这个lock
       // 已经被访问过了
       // 为什么有可能被访问过?
-      // dfs 常见问题, 想一下
+      // dfs 正常情行
+      // 这里并没有调用get_first_lock(heap_no) 是因为在下面
+      // else if(lock->trx_que_state() == TRX_QUE_LOCK_WAIT) 这个branch 里面
+      // 已经执行过get_first_lock() 了
+      // 
       lock = get_next_lock(lock, heap_no);
     }
 
@@ -7193,6 +7206,12 @@ const trx_t *DeadlockChecker::search() {
 
       ut_ad(s_lock_mark_counter > 0);
 
+      // lock == NULL 和 lock = get_next_lock(lock, heap_no) 的区别
+      // lock == NULL 就直接将这个record 的所有Lock 都跳过了, 而get_next_lock
+      // 则是处理这个record 的下一个lock
+      // 一般把一个record 的所有lock 都处理完以后, 这个get_next_lock()
+      // 返回的Lock == NULL, 然后把这个record 跳过
+      //
       /* Backtrack */
       lock = NULL;
 
@@ -7243,6 +7262,9 @@ const trx_t *DeadlockChecker::search() {
       // 典型的场景: 比如很多trx 都拥有record 的s lock, 然后这个时候trx1
       // 进来, 要一个这个record 的x lock, 那么这里push 进去的时候就是一堆的
       // s lock 了
+      // 
+      // 这里push 成功以后, 其实马上下面马上执行
+      // lock = get_first_lock(&heap_no) 就开始遍历处理这个lock 了
       if (!push(lock, heap_no)) {
         m_too_deep = true;
         return (m_start);
@@ -7255,7 +7277,8 @@ const trx_t *DeadlockChecker::search() {
 
       lock = get_first_lock(&heap_no);
 
-      // dfs 的时候判断如果这个record 已经
+      // dfs 的时候判断如果这个record 已经被访问过了, 就跳到这个record
+      // 下一个lock
       if (is_visited(lock)) {
         lock = get_next_lock(lock, heap_no);
       }
@@ -7401,6 +7424,11 @@ const trx_t *DeadlockChecker::check_and_resolve(const lock_t *lock,
 
     // 只要检测出有死锁, 有victim 的trx, 并且这个trx 不是当前这个trx
     // 那么就继续检测有没有死锁出现, 出现死锁, 就把选出的相应的trx rollback
+    // 为什么要继续监测?
+    // 因为在search() 的时候只是找到一个环就退出了, 可能还有环
+    // 如果victim 的是当前的trx, 那就不可能有环了了, 有环的话, 之前的deadlock
+    // check 就应该监测出来了
+    //
   } while (victim_trx != NULL && victim_trx != trx);
 
   /* If the joining transaction was selected as the victim. */

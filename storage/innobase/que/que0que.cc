@@ -1009,6 +1009,7 @@ void que_run_threads(que_thr_t *thr) /*!< in: query thread */
 loop:
   ut_a(thr_get_trx(thr)->error_state == DB_SUCCESS);
 
+  // 运行改thr 如果有返回值, 放在thr->state 结构体中
   que_run_threads_low(thr);
 
   switch (thr->state) {

@@ -393,6 +393,9 @@ static void lock_wait_release_thread_if_suspended(que_thr_t *thr) {
   ut_ad(trx->lock.wait_lock == NULL);
 
   if (thr->slot != NULL && thr->slot->in_use && thr->slot->thr == thr) {
+    // 这里将这个trx 唤醒, 因为这个trx 是被别的trx 选成victim
+    // 那么设置trx->error_state, 然后重置was_chosen_as_deadlock_victim = false
+    // 为了接下来trx 重用
     if (trx->lock.was_chosen_as_deadlock_victim) {
       trx->error_state = DB_DEADLOCK;
       trx->lock.was_chosen_as_deadlock_victim = false;
@@ -400,6 +403,7 @@ static void lock_wait_release_thread_if_suspended(que_thr_t *thr) {
       ut_d(trx->lock.in_rollback = true);
     }
 
+    // 设置完以后, 将改trx 所在的线程唤醒
     os_event_set(thr->slot->event);
   }
 }
@@ -418,6 +422,10 @@ void lock_reset_wait_and_release_thread_if_suspended(lock_t *lock) {
   TRX_QUE_LOCK_WAIT state, and there is no need to end the lock wait
   for it */
 
+  // 如果是deadlock_check 的时候将自己设置成victim, 那么就不需要唤醒,
+  // 本身就自己在执行
+  // 当其他trx suspend 的时候, 那么状态肯定是TRX_QUE_LOCK_WAIT
+  // 那么才需要去唤醒他
   if (lock->trx_que_state() == TRX_QUE_LOCK_WAIT) {
     /* The following function releases the trx from lock wait */
 

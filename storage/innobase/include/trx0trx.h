@@ -1075,6 +1075,9 @@ struct trx_t {
   space_id_t undo_rseg_space;
   /*!< space id where last undo record
   was written */
+  // last_sql_stat_start 用于标记上一个SQL 语言执行到了哪一个savept
+  // savept 用于标记回滚点, 如果一个事务有多个语句,
+  // 那么每一个语句会有一个savept, 回滚的时候会回滚到该 savept
   trx_savept_t last_sql_stat_start;
   /*!< undo_no when the last sql statement
   was started: in case of an error, trx

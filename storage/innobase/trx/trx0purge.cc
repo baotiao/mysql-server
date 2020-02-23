@@ -519,8 +519,11 @@ static void trx_purge_truncate_rseg_history(
   rseg_hdr =
       trx_rsegf_get(rseg->space_id, rseg->page_no, rseg->page_size, &mtr);
 
+  // 从 rollback segment header 上面的 History List Base Node
+  // 读取指向的下一个page 的地址
   hdr_addr = trx_purge_get_log_from_hist(
       flst_get_last(rseg_hdr + TRX_RSEG_HISTORY, &mtr));
+// 这里通过loop 按照History List Base Node 遍历这个list
 loop:
   if (hdr_addr.page == FIL_NULL) {
     mutex_exit(&(rseg->mutex));
@@ -530,14 +533,21 @@ loop:
     return;
   }
 
+  // 有rollback segment header 上面的History List Base Node 读取到的第一个 page
   undo_page = trx_undo_page_get(page_id_t(rseg->space_id, hdr_addr.page),
                                 rseg->page_size, &mtr);
 
+  // undo_page 上面的第一个undo Record 的header 了
   log_hdr = undo_page + hdr_addr.boffset;
 
+  // 读取第一个undo log trx no
   undo_trx_no = mach_read_from_8(log_hdr + TRX_UNDO_TRX_NO);
 
+  // 这里在trx commit 阶段的时候, 就是按照 trx->trx_no 的顺序插入到rollback
+  // segment history, 所以purge 的时候设定好limit->trx_no(一般是最老的readview
+  // 的 trx_no). purge 到这个 Limit->trx_no 就可以了
   if (undo_trx_no >= limit->trx_no) {
+    // 进到这个bransh 说明不需要在purge 了, 可以退出了
     /* limit space_id should match the rollback segment
     space id to avoid freeing if the page belongs to a
     different rollback segment for the same trx_no. */
@@ -553,6 +563,7 @@ loop:
     return;
   }
 
+  // 标记一下前一个Undo log record 的undo log header 的地址, 用于使用这里的loop
   prev_hdr_addr = trx_purge_get_log_from_hist(
       flst_get_prev_addr(log_hdr + TRX_UNDO_HISTORY_NODE, &mtr));
 
@@ -562,6 +573,8 @@ loop:
       (mach_read_from_2(log_hdr + TRX_UNDO_NEXT_LOG) == 0)) {
     /* We can free the whole log segment */
 
+    // 这个branch 是常见情况, 也就是一个undo page 就一条undo log record
+    // 而且这个undo log record 也只在这个undo page 里面
     mutex_exit(&(rseg->mutex));
     mtr_commit(&mtr);
 
@@ -571,9 +584,12 @@ loop:
 
   } else {
     /* Remove the log hdr from the rseg history. */
-    // 这里可以看到purge 的时候先把一个undo slot 默认的undo log 先purge 掉,
-    // 然后再purge 前面的
+    // 这个branch 处理的是一个undo log record 占用了多个undo page 或者一个undo
+    // page 里面包含了多个undo log record
 
+    // 这个branch 表示没有把这个多个undo segment 组成的undo log record 找干净,
+    // 先把当前找到的这个first page 从rollback segment history list 上面删除
+    // 然后在继续loop 去删除剩余的undo segment
     trx_purge_remove_log_hdr(rseg_hdr, log_hdr, &mtr);
 
     mutex_exit(&(rseg->mutex));

@@ -607,6 +607,10 @@ struct rw_lock_t
   unsigned cline : 13;
 
   /** If 1 then the rw-lock is a block lock */
+  // 如果是buffer pool 里面的block rwlock 那么就设置成1
+  // 否则都是0
+  // 主要用在show engine innodb mutex 的时候, 用于统计整体的buffer pool
+  // 的统计信息
   unsigned is_block_lock : 1;
 
   /** Line number where last time s-locked */

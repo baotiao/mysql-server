@@ -2851,6 +2851,8 @@ static ulint srv_do_purge(
 
     *n_total_purged += n_pages_purged;
 
+    // 这要每次能够有需要purge 的record, 那就持续Purge
+    // 否则退出就suspend 一段时间
   } while (!srv_purge_should_exit(n_pages_purged) && n_pages_purged > 0 &&
            purge_sys->state == PURGE_STATE_RUN);
 
@@ -2887,8 +2889,11 @@ static void srv_purge_coordinator_suspend(
     we want to signal the thread that wants to suspend purge. */
 
     if (stop) {
+      // 这里purge thread 统一由 srv_slot_t 结构体来管理
+      // 所以wait 在slot->event 上
       os_event_wait_low(slot->event, sig_count);
       ret = 0;
+      // 上一次purge 时候history list 长度
     } else if (rseg_history_len <= trx_sys->rseg_history_len) {
       ret =
           os_event_wait_time_low(slot->event, SRV_PURGE_MAX_TIMEOUT, sig_count);

@@ -340,6 +340,8 @@ lock_loop:
   ++spin_count;
 
   /* We try once again to obtain the lock */
+  // 从上面的lock_word <= 0 退出, 说明有人把锁放开了, 可以尝试去获得这个lock 了
+  // rw_lock_s_lock_low 去获得直接获得 lock, 并不执行spin 操作
   if (rw_lock_s_lock_low(lock, pass, file_name, line)) {
     if (count_os_wait > 0) {
       lock->count_os_wait += static_cast<uint32_t>(count_os_wait);

@@ -1518,6 +1518,8 @@ static bool trx_write_serialisation_history(
     if (trx->rsegs.m_redo.update_undo != NULL) {
       page_t *undo_hdr_page;
 
+      // 事务提交的时候, 是通过将undo state设置成TRX_UNDO_ACTIVE
+      // 来实现, undo state 存在undo segment header 的state 字段
       undo_hdr_page =
           trx_undo_set_state_at_finish(trx->rsegs.m_redo.update_undo, mtr);
 

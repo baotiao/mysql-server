@@ -1250,6 +1250,8 @@ class buf_page_t {
 
   FlushObserver *flush_observer; /*!< flush observer */
 
+  // 如果一个page 在flush list 里面的时候, 又被修改了, 那么oldest_modification
+  // 是不变的, 这个时候这个newest_modification 会改成最新的这次修改的lsn
   lsn_t newest_modification;
   /*!< log sequence number of
   the youngest modification to

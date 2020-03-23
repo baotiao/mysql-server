@@ -1720,6 +1720,7 @@ func_exit:
 
 /** Sets the state of the undo log segment at a transaction finish.
  @return undo log segment header page, x-latched */
+// 事务提交的时候, 设置undo header 的地方
 page_t *trx_undo_set_state_at_finish(
     trx_undo_t *undo, /*!< in: undo log memory copy */
     mtr_t *mtr)       /*!< in: mtr */
@@ -1737,16 +1738,21 @@ page_t *trx_undo_set_state_at_finish(
   seg_hdr = undo_page + TRX_UNDO_SEG_HDR;
   page_hdr = undo_page + TRX_UNDO_PAGE_HDR;
 
+  // 如果这个undo 只是用了一个undo page, 并且free 的空间小于3/4, 那么把 page
+  // 放在cache list, 直接使用
   if (undo->size == 1 && mach_read_from_2(page_hdr + TRX_UNDO_PAGE_FREE) <
                              TRX_UNDO_PAGE_REUSE_LIMIT) {
     state = TRX_UNDO_CACHED;
 
+  // 如果这是一个insert 的undo, 那么直接把这个seg 状态改成free, 直接被复用
   } else if (undo->type == TRX_UNDO_INSERT) {
     state = TRX_UNDO_TO_FREE;
   } else {
+    // 否则PURGE
     state = TRX_UNDO_TO_PURGE;
   }
 
+  // undo state 是放在undo segment header中
   undo->state = state;
 
   mlog_write_ulint(seg_hdr + TRX_UNDO_STATE, state, MLOG_2BYTES, mtr);

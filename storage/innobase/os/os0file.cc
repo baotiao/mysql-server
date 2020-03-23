@@ -7656,7 +7656,7 @@ static dberr_t os_aio_simulated_handler(ulint global_segment, fil_node_t **m1,
 
     srv_set_io_thread_op_info(global_segment, "looking for i/o requests (b)");
 
-    array->acquire();
+    array->acquire(segment);
 
     ulint n_reserved;
 

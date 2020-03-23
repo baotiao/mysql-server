@@ -301,7 +301,6 @@ void trx_purge_sys_close(void) {
 // 把当前这个undo_log 添加到自己rollback segment 的history list 中
 // 注意这里不是添加到purge_sys 里面, 把rollback segment 添加到purge_sys
 // 是在事务提交的时候就做了
-//
 void trx_purge_add_update_undo_to_history(
     trx_t *trx,               /*!< in: transaction */
     trx_undo_ptr_t *undo_ptr, /*!< in/out: update undo log. */
@@ -338,7 +337,9 @@ void trx_purge_add_update_undo_to_history(
       ib::fatal(ER_IB_MSG_1165) << "undo->id is " << undo->id;
     }
 
-    // 把undo id 写入到rollback_segment 结构体的undo segment slot中
+    // 只要这个undo->state != cache, 那么说明这个undo slot 可以被复用了,
+    // 因此将rollback segment 上的这个slot 写入 FIL_NULL
+    // 那么申请空闲Undo slot 的时候就可以申请到了
     trx_rsegf_set_nth_undo(rseg_header, undo->id, FIL_NULL, mtr);
 
     MONITOR_DEC(MONITOR_NUM_UNDO_SLOT_USED);
@@ -357,6 +358,8 @@ void trx_purge_add_update_undo_to_history(
   flst_add_first(rseg_header + TRX_RSEG_HISTORY,
                  undo_header + TRX_UNDO_HISTORY_NODE, mtr);
 
+  // 如果修改了 rollback segment history 的长度
+  // 可以唤醒purge thread, 让他执行purge 了
   if (update_rseg_history_len) {
     os_atomic_increment_ulint(&trx_sys->rseg_history_len, n_added_logs);
     srv_wake_purge_thread_if_not_active();

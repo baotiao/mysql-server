@@ -222,6 +222,10 @@ ulint rw_lock_get_sx_lock_count(const rw_lock_t *lock) /*!< in: rw-lock */
  need not be atomic since they are performed by the current lock holder.
  Returns true if the decrement was made, false if not.
  @return true if decr occurs */
+// 这里最后执rw_lock_t 加锁的地方, 这里有两种实现方式
+// 如果系统支持atomics 操作, 那么就类似使用无锁的方式, 通过底层的cas
+// 操作来进行对lock_word 的修改
+// 如果不支持, 那就只能加锁了
 ALWAYS_INLINE
 bool rw_lock_lock_word_decr(rw_lock_t *lock, /*!< in/out: rw-lock */
                             ulint amount,    /*!< in: amount to decrement */

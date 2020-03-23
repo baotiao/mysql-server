@@ -843,6 +843,7 @@ static bool log_should_checkpoint(log_t &log) {
   current_lsn =
       log_translate_sn_to_lsn(log_translate_lsn_to_sn(current_lsn) + margin);
 
+  // 这次要打checkpoint 的redo log 的大小
   checkpoint_age = current_lsn - last_checkpoint_lsn;
 
   checkpoint_time_elapsed = log_checkpoint_time_elapsed(log);
@@ -860,6 +861,14 @@ static bool log_should_checkpoint(log_t &log) {
 
   if ((log.periodical_checkpoints_enabled && !periodical_checkpoint_disabled &&
        checkpoint_time_elapsed >= srv_log_checkpoint_every * 1000ULL) ||
+      // 如果超过了 max_checkpoint_age_sync
+      // 那么就肯定需要刷脏了
+      // max_checkpoint_age_async = 31/32 * limit
+      // log.max_checkpoint_age_async =
+      // limit - limit / LOG_POOL_CHECKPOINT_RATIO_ASYNC;
+      // lsn_capacity_for_free_check 指的是当前redo log 里面除去header, tailer 还有为了防止并发额外减去一部分空间以后的剩余空间
+      // checkpoint_age = current_lsn - last_checkpoint_lsn;
+      // 也就是从上一次checkpoint 以后, 这次更新的数据大小. 如果超过了 lsn_capacity_for_free_check 的31/32 了, 那么就需要进行一次checkpoint 了. 这次修改了内容已经有31/32, 只剩下1/32 空闲redo log 空间, 肯定要做checkpoint 了
       checkpoint_age >= log.max_checkpoint_age_async ||
       (requested_checkpoint_lsn > last_checkpoint_lsn &&
        requested_checkpoint_lsn <= oldest_lsn)) {

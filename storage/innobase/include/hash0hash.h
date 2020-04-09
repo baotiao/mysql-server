@@ -415,6 +415,9 @@ struct hash_table_t {
                  of mutexes or the number of
                  rw_locks depending on the type.
                  Must be a power of 2 */
+  // 这里的hash table 里面, 每一个segment, 也就是每一个slot 有一个Mutex
+  // 或者一个rw_lock 进行保护, 可以稍微将锁的粒度从整个hash_table 降低到slot,
+  // 或者这了称呼的segment 里面
   union {
     ib_mutex_t *mutexes; /* NULL, or an array of mutexes
                          used to protect segments of the

@@ -552,6 +552,7 @@ struct TTASEventMutex {
   @param[in]	line		within filename */
   void enter(uint32_t max_spins, uint32_t max_delay, const char *filename,
              uint32_t line) UNIV_NOTHROW {
+    // 尝试加锁, 这里
     if (!try_lock()) {
       spin_and_try_lock(max_spins, max_delay, filename, line);
     }

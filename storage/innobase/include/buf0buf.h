@@ -1327,6 +1327,8 @@ struct buf_block_t {
                    aligned to an address divisible by
                    UNIV_PAGE_SIZE */
 #ifndef UNIV_HOTBACKUP
+  // 用户保护buffer frame 的读写锁, 这个是用于保护buffer pool 里面的内容, 要和
+  // BPageMutex mutex; 区分开来
   BPageLock lock; /*!< read-write lock of the buffer
                   frame */
 #endif            /* UNIV_HOTBACKUP */

@@ -937,6 +937,7 @@ buf_pool_t *buf_pool_from_array(ulint index) /*!< in: array index to get
 @param[in]	buf_pool	buffer pool instance
 @param[in]	page_id		page id
 @return block, NULL if not found */
+// 这个get 操作只会确保如果在buffer pool 中, 读取出来否则就返回 not found
 UNIV_INLINE
 buf_page_t *buf_page_hash_get_low(buf_pool_t *buf_pool,
                                   const page_id_t &page_id) {
@@ -945,7 +946,7 @@ buf_page_t *buf_page_hash_get_low(buf_pool_t *buf_pool,
 #ifdef UNIV_DEBUG
   rw_lock_t *hash_lock;
 
-  // 可以发现, 任何想要操作hashtable 之前, 都需要拿一下这个hashlock
+  // 可以发现, 任何想要操作hashtable 之前, 都需要拿一下这个hash_lock
   hash_lock = hash_get_lock(buf_pool->page_hash, page_id.fold());
   ut_ad(rw_lock_own(hash_lock, RW_LOCK_X) || rw_lock_own(hash_lock, RW_LOCK_S));
 #endif /* UNIV_DEBUG */
@@ -956,6 +957,7 @@ buf_page_t *buf_page_hash_get_low(buf_pool_t *buf_pool,
               ut_ad(bpage->in_page_hash && !bpage->in_zip_hash &&
                     buf_page_in_file(bpage)),
               page_id.equals_to(bpage->id));
+  // 如果可以在page_hash 里面找到这个page, 说明这个page 之前已经被读取到内存中了
   if (bpage) {
     ut_a(buf_page_in_file(bpage));
     ut_ad(bpage->in_page_hash);
@@ -996,6 +998,7 @@ buf_page_t *buf_page_hash_get_locked(buf_pool_t *buf_pool,
     mode = lock_mode;
   }
 
+  // 这里是获得这个page_hash hash_table 上面的某一个slot/segment 的锁
   hash_lock = hash_get_lock(buf_pool->page_hash, page_id.fold());
 
   ut_ad(!rw_lock_own(hash_lock, RW_LOCK_X) &&

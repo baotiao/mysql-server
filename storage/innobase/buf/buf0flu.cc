@@ -885,6 +885,7 @@ void buf_flush_write_complete(buf_page_t *bpage) {
 
   buf_flush_remove(bpage);
 
+  // write 完成以后, 设置该page 的io_fix
   buf_page_set_io_fix(bpage, BUF_IO_NONE);
 
   buf_pool->n_flush[flush_type]--;
@@ -893,6 +894,15 @@ void buf_flush_write_complete(buf_page_t *bpage) {
       buf_pool->init_flush[flush_type] == FALSE) {
     /* The running flush batch has ended */
 
+    // 关于flush 相关的wait, wait-up 逻辑主要三个变量
+    // n_flush 表示的是这个类型的要flush 的操作还有多少个
+    // no_flush 是等待着的条件变量
+    // 那么哪个线程会sleep 在 no_flush 这个条件变量呢?
+    //
+    // buf_flush_wait_batch_end(type)
+    // 主要是有一些操作需要等待LRU_list 或者 flush_list 完成刷脏,
+    // 才会进行下一步操作
+    // 比如在进行 checkpoint 的时候, 需要
     os_event_set(buf_pool->no_flush[flush_type]);
   }
 
@@ -1233,6 +1243,8 @@ static void buf_flush_write_block_low(buf_page_t *bpage, buf_flush_t flush_type,
     IORequest request(type);
 
     // 这里把上面组织好的page 写入到 btree page
+    // 这里如果是async 这次IO 操作只是放到IO 队列中, 后续还需要等待这个IO
+    // 完成的唤醒操作
     err = fil_io(request, sync, bpage->id, bpage->size, 0,
                  bpage->size.physical(), frame, bpage);
 
@@ -1331,6 +1343,7 @@ ibool buf_flush_page(buf_pool_t *buf_pool, buf_page_t *bpage,
 
     mutex_enter(&buf_pool->flush_state_mutex);
 
+    // 把 io_fix 设置成 BUF_IO_WRITE
     buf_page_set_io_fix(bpage, BUF_IO_WRITE);
 
     buf_page_set_flush_type(bpage, flush_type);

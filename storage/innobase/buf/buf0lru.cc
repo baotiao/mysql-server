@@ -465,6 +465,9 @@ static MY_ATTRIBUTE((warn_unused_result)) bool buf_flush_or_remove_page(
   /* It is safe to check bpage->space and bpage->io_fix while holding
   buf_pool->LRU_list_mutex only. */
 
+  // 在buf_flush_or_remove 这里, 要从buffer pool 删除一个page 的时候,
+  // 就会去判断io_fix 是否== BUF_IO_NONE, 如果!= BUF_IO_NONE, 那就说明这个page
+  // 正在有IO 进行, 就不能删除
   if (buf_page_get_io_fix_unlocked(bpage) != BUF_IO_NONE) {
     /* We cannot remove this page during this scan
     yet; maybe the system is currently reading it

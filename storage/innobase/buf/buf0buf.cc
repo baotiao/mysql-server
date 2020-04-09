@@ -3357,6 +3357,8 @@ static void buf_wait_for_read(buf_block_t *block) {
     for (;;) {
       if (buf_block_get_io_fix_unlocked(block) == BUF_IO_READ) {
         /* Wait by temporaly s-latch */
+        // 在这里通过拿s lock, 如果拿到的话, 那么说明page 已经读上来
+        // 否则就需要通过sleep 进行等待
         if (rw_lock_s_lock_low(&block->lock, 0, __FILE__, __LINE__)) {
           rw_lock_s_unlock(&block->lock);
         } else {
@@ -3442,6 +3444,7 @@ dberr_t Buf_fetch_normal::get(buf_block_t *&block) {
     }
 
     /* Page not in buf_pool: needs to be read from file */
+    // page 不在buffer pool 里面, 这个时候需要触发一个磁盘IO 了
     read_page();
   }
 
@@ -3527,6 +3530,9 @@ buf_block_t *Buf_fetch<T>::lookup() {
   }
 
   if (block == nullptr) {
+    // 这里如果能够读取出来, 那么说明这个page 之前就已经在page_hash 中,
+    // 也就是之前已经读取到内存中了
+    // 否则就需要发起IO 去进行read 了
     block = reinterpret_cast<buf_block_t *>(
         buf_page_hash_get_low(m_buf_pool, m_page_id));
   }
@@ -3869,6 +3875,8 @@ void Buf_fetch<T>::mtr_add_page(buf_block_t *block) {
       break;
   }
 
+  // 这里将block 已有的latch 类型推到mtr_memo 中
+  // 在mtr 提交的时候一起free
   mtr_memo_push(m_mtr, block, fix_type);
 }
 
@@ -4613,6 +4621,7 @@ buf_page_t *buf_page_init_for_read(dberr_t *err, ulint mode,
   if (page_size.is_compressed() && !unzip && !recv_recovery_is_on()) {
     block = NULL;
   } else {
+    // 先尝试从LRU list 获得一个free block
     block = buf_LRU_get_free_block(buf_pool);
     ut_ad(block);
     ut_ad(buf_pool_from_block(block) == buf_pool);
@@ -4676,6 +4685,9 @@ buf_page_t *buf_page_init_for_read(dberr_t *err, ulint mode,
     safe because no other thread can lookup the block from the
     page hashtable yet. */
 
+    // 这里并没有加着这个page rw_lock 然后再设置page 的io_fix
+    // 因为到这里的时候已经加着page 所在hashtable hash_lock, 所以锁的粒度是
+    // hash_lock => page->rw_lock
     buf_page_set_io_fix(bpage, BUF_IO_READ);
 
     /* The block must be put to the LRU list, to the old blocks */
@@ -4704,12 +4716,17 @@ buf_page_t *buf_page_init_for_read(dberr_t *err, ulint mode,
     read is completed.  The x-lock is cleared by the
     io-handler thread. */
 
+    // 这里给page frame 加了rw_lock x lock,
+    // 保证统一时刻只会有一个线程从磁盘去读取这个page
     rw_lock_x_lock_gen(&block->lock, BUF_IO_READ);
 
+    // 依次放开hash_lock rw_lock
     rw_lock_x_unlock(hash_lock);
 
+    // block header mutex
     buf_page_mutex_exit(block);
   } else {
+    // 如果从LRU list 里面没有找到一个空闲的block, 那么只能临时申请
     /* Initialize the buf_pool pointer. */
     bpage->buf_pool_index = buf_pool_index(buf_pool);
 
@@ -5236,6 +5253,8 @@ bool buf_page_io_complete(buf_page_t *bpage, bool evict) {
           buf_page_get_flush_type(bpage) == BUF_FLUSH_LRU ||
           buf_page_get_flush_type(bpage) == BUF_FLUSH_SINGLE_PAGE)) {
 
+    // 这里如果是write 操作, 并且flush 的是从LRU list 或者是flush single page
+    // 那么肯定是已经获得 lru mutex
     have_LRU_mutex = true; /* optimistic */
   } else {
     mutex_exit(&buf_pool->LRU_list_mutex);
@@ -5262,6 +5281,7 @@ bool buf_page_io_complete(buf_page_t *bpage, bool evict) {
 
       ut_ad(!have_LRU_mutex);
 
+      // 在buf_page_io_complete 里面, 会将该page 的io_fix 设置成none
       buf_page_set_io_fix(bpage, BUF_IO_NONE);
 
       /* NOTE that the call to ibuf may have moved the ownership of
@@ -5269,6 +5289,8 @@ bool buf_page_io_complete(buf_page_t *bpage, bool evict) {
       debugging! */
 
       if (uncompressed) {
+        // 这里在buf_page_io_complete 里面可以看到, read 操作拿的是rw_lock 
+        // x lock, 而write 操作是拿rw_lock sx lock
         rw_lock_x_unlock_gen(&((buf_block_t *)bpage)->lock, BUF_IO_READ);
       }
 
@@ -5287,11 +5309,23 @@ bool buf_page_io_complete(buf_page_t *bpage, bool evict) {
       buf_flush_write_complete(bpage);
 
       if (uncompressed) {
+        // 在这里才把page 上面的rw_lock 给放开
         rw_lock_sx_unlock_gen(&((buf_block_t *)bpage)->lock, BUF_IO_WRITE);
       }
 
       os_atomic_increment_ulint(&buf_pool->stat.n_pages_written, 1);
 
+      // 在写IO 完成以后, 需要考虑是否要从 LRU list 上将 page 移除,
+      // 如果这个page 是从flush_list 上面写IO 完成, 那么就不需要从flush_list
+      // 上面删除, 因为从flush list 上面删除要完成的操作是刷脏,
+      // 既然只是为了刷脏, 那么就没必要让他从lru list 上面删除, 有可能这个page
+      // 被刷脏了, 还是一个热page 是需要访问的
+      // 如果这个page 是从lru_list 上面写IO 完成, 那就需要从lru list 上面删除
+      // 原因: 从lru_list 上面删除的page 肯定说明这个page 不是hot page 了,
+      // 更大的原因可能是buffer pool 空间不够, 需要从lru list 上面淘汰一些page
+      // 了, 既然这些page 是要从lru list 上面淘汰的, 那么肯定就需要从LRU list
+      // 上面移除了
+      //
       /* We decide whether or not to evict the page from the
       LRU list based on the flush_type.
       * BUF_FLUSH_LIST: don't evict
@@ -5768,6 +5802,10 @@ static ulint buf_get_latched_pages_number_instance(buf_pool_t *buf_pool) {
         continue;
       }
 
+      // 这里统计page 是否被latch 的时候, 计算方式是
+      // buf_fix_count != 0, 并且 io_fix != IN_NONO
+      // 说明这个时候这个 page 要么IO_READ, 要么IO_WRITE
+      // 同时有另外一个buf_fix_count != 0, 说明其他线程在等这个lock
       if (block->page.buf_fix_count != 0 ||
           buf_page_get_io_fix_unlocked(&block->page) != BUF_IO_NONE) {
         fixed_pages_number++;

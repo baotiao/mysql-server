@@ -3436,8 +3436,13 @@ dberr_t Buf_fetch_normal::get(buf_block_t *&block) {
     block = lookup();
 
     if (block != nullptr) {
+      // lookup() 操作会查找page 是否在内存的hash table 中, 如果在
+      // 这里马上进行block_fix 操作, buf_fix_count++
+      // buf_fix_count++ 表示有操作在这个page 上面, 不允许其他thread 把这个block
+      // 给remove 或者insert
       buf_block_fix(block);
 
+      // 获得了 buf_fix_count 以后, 就可以把 page_hash 给释放
       /* Now safe to release page_hash S lock. */
       rw_lock_s_unlock(m_hash_lock);
       break;
@@ -3504,12 +3509,16 @@ dberr_t Buf_fetch_other::get(buf_block_t *&block) {
 
 template <typename T>
 buf_block_t *Buf_fetch<T>::lookup() {
+  // 1. 先获得page 所在的hash table hash_lock
   m_hash_lock = buf_page_hash_lock_get(m_buf_pool, m_page_id);
 
   auto block = m_guess;
 
+  // 对hash_lock 加 s lock
   rw_lock_s_lock(m_hash_lock);
 
+  // 由于没有持有LRU_list_mutex, 所以这个hash_lock 有可能被修改
+  // 因此LRU_list_mutex 的粒度是大于 hash lock
   /* If not own LRU_list_mutex, page_hash can be changed. */
   m_hash_lock =
       buf_page_hash_lock_s_confirm(m_hash_lock, m_buf_pool, m_page_id);
@@ -4409,12 +4418,17 @@ const buf_block_t *buf_page_try_get_func(const page_id_t &page_id,
                                          mtr_t *mtr) {
   buf_block_t *block;
   ibool success;
+  // 这里就是最常见的buffer pool page 并发控制的过程
+  // 1. 首先获得这个bp, 因此这里不涉及到各个list 相关操作, 因此没有list
+  // 相关Mutex
   buf_pool_t *buf_pool = buf_pool_get(page_id);
   rw_lock_t *hash_lock;
 
   ut_ad(mtr);
   ut_ad(mtr->is_active());
 
+  // 2. 获得这个page 在hash table 上面的slot 上面的block, 
+  // 同时在这个函数里面, 已经把这个hash_lock 给s lock 了
   block = buf_block_hash_get_s_locked(buf_pool, page_id, &hash_lock);
 
   if (!block || buf_block_get_state(block) != BUF_BLOCK_FILE_PAGE) {
@@ -4426,6 +4440,7 @@ const buf_block_t *buf_page_try_get_func(const page_id_t &page_id,
 
   ut_ad(!buf_pool_watch_is_sentinel(buf_pool, &block->page));
 
+  // 3. 或者这个page block block mutex, 同时将这里的hash_lock 给释放
   buf_page_mutex_enter(block);
   rw_lock_s_unlock(hash_lock);
 
@@ -4434,9 +4449,11 @@ const buf_block_t *buf_page_try_get_func(const page_id_t &page_id,
   ut_a(page_id.equals_to(block->page.id));
 #endif /* UNIV_DEBUG || UNIV_BUF_DEBUG */
 
+  // 4. 给这个block buf_fix_count++, 同时把这个page block mutex 释放
   buf_block_buf_fix_inc(block, file, line);
   buf_page_mutex_exit(block);
 
+  // 5. 获得这个page frame 的rw_lock
   mtr_memo_type_t fix_type = MTR_MEMO_PAGE_S_FIX;
   success = rw_lock_s_lock_nowait(&block->lock, file, line);
 
@@ -4636,10 +4653,11 @@ buf_page_t *buf_page_init_for_read(dberr_t *err, ulint mode,
     data = buf_buddy_alloc(buf_pool, page_size.physical());
   }
 
+  // 1. 先持有LRU_list_mutex
   mutex_enter(&buf_pool->LRU_list_mutex);
 
+  // 2. 然后持有 hash_lock
   hash_lock = buf_page_hash_lock_get(buf_pool, page_id);
-
   rw_lock_x_lock(hash_lock);
 
   buf_page_t *watch_page;
@@ -4677,6 +4695,7 @@ buf_page_t *buf_page_init_for_read(dberr_t *err, ulint mode,
 
     ut_ad(buf_pool_from_bpage(bpage) == buf_pool);
 
+    // 3. 持有page block mutex
     buf_page_mutex_enter(block);
 
     buf_page_init(buf_pool, page_id, page_size, block);
@@ -4688,6 +4707,7 @@ buf_page_t *buf_page_init_for_read(dberr_t *err, ulint mode,
     // 这里并没有加着这个page rw_lock 然后再设置page 的io_fix
     // 因为到这里的时候已经加着page 所在hashtable hash_lock, 所以锁的粒度是
     // hash_lock => page->rw_lock
+    // 4. 在持有page block mutex 以后, 修改io_fix
     buf_page_set_io_fix(bpage, BUF_IO_READ);
 
     /* The block must be put to the LRU list, to the old blocks */
@@ -4717,13 +4737,13 @@ buf_page_t *buf_page_init_for_read(dberr_t *err, ulint mode,
     io-handler thread. */
 
     // 这里给page frame 加了rw_lock x lock,
-    // 保证统一时刻只会有一个线程从磁盘去读取这个page
+    // 保证同一时刻只会有一个线程从磁盘去读取这个page
     rw_lock_x_lock_gen(&block->lock, BUF_IO_READ);
 
     // 依次放开hash_lock rw_lock
     rw_lock_x_unlock(hash_lock);
 
-    // block header mutex
+    // page block mutex
     buf_page_mutex_exit(block);
   } else {
     // 如果从LRU list 里面没有找到一个空闲的block, 那么只能临时申请
@@ -4848,6 +4868,7 @@ buf_block_t *buf_page_create(const page_id_t &page_id,
 
   buf_page_init(buf_pool, page_id, page_size, block);
 
+  // buf_fix_count 一般在获得buf page mutex 之后进行操作
   buf_block_buf_fix_inc(block, __FILE__, __LINE__);
 
   buf_page_set_accessed(&block->page);
@@ -5803,7 +5824,7 @@ static ulint buf_get_latched_pages_number_instance(buf_pool_t *buf_pool) {
       }
 
       // 这里统计page 是否被latch 的时候, 计算方式是
-      // buf_fix_count != 0, 并且 io_fix != IN_NONO
+      // buf_fix_count != 0, 或者 io_fix != IN_NONO
       // 说明这个时候这个 page 要么IO_READ, 要么IO_WRITE
       // 同时有另外一个buf_fix_count != 0, 说明其他线程在等这个lock
       if (block->page.buf_fix_count != 0 ||

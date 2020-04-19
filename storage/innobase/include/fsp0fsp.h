@@ -155,6 +155,12 @@ descriptor page, but used only in the first. */
 #define FSP_FREE_FRAG (24 + FLST_BASE_NODE_SIZE)
 /* list of partially free extents not
 belonging to any segment */
+// 这里可以看到 extents 是属于某一个segment
+// 但是有可能某些segment 申请的时候是按照page 申请的(在segment 比较小的时候,
+// 因为如果每次都是按照1M 大小申请, 如果用户都是create 小表,
+// 那么就会非常的浪费空间, 因此当当前文件小于1个extent 的时候,
+// 申请的就直接是page, 而不是extent)
+// 这种extent 不完全属于一个segment 称作 FRAG extent
 #define FSP_FULL_FRAG (24 + 2 * FLST_BASE_NODE_SIZE)
 /* list of full extents not belonging
 to any segment */
@@ -271,6 +277,7 @@ File extent descriptor data structure: contains bits to tell which pages in
 the extent are free and which contain old tuple version to clean. */
 
 /*-------------------------------------*/
+// extent 是属于某一个segment
 #define XDES_ID                      \
   0 /* The identifier of the segment \
     to which this extent belongs */

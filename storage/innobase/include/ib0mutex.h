@@ -552,7 +552,13 @@ struct TTASEventMutex {
   @param[in]	line		within filename */
   void enter(uint32_t max_spins, uint32_t max_delay, const char *filename,
              uint32_t line) UNIV_NOTHROW {
-    // 尝试加锁, 这里
+    // 在try_lock 中通过 TAS 比较是否m_lock_word = LOCKED
+    // TAS(&m_lock_word, MUTEX_STATE_LOCKED) == MUTEX_STATE_UNLOCKED
+    // 在InnoDB 自己实现的mutex 中, 使用m_lock_word = 0, 1, 2 分别来比较unlock,
+    // lock, wait 状态
+    // 在InnoDB 自己实现的rw_lock 中, 同样使用 m_lock_word 来标记状态,
+    // 不过rw_lock 记录的状态就不止lock, unlock, 需要记录有多少read 等待,
+    // 多少write 等待等待, 不过大体都一样
     if (!try_lock()) {
       spin_and_try_lock(max_spins, max_delay, filename, line);
     }
@@ -636,6 +642,8 @@ struct TTASEventMutex {
     for (;;) {
       /* If the lock was free then try and acquire it. */
 
+      // is_free 的逻辑很简单, 每spin 一次, 就检查一下这个lock 是否可以获得,
+      // 如果不可以获得, 那么就delay (0, max_delay] 的时间
       if (is_free(max_spins, max_delay, n_spins)) {
         if (try_lock()) {
           break;
@@ -649,6 +657,7 @@ struct TTASEventMutex {
 
       ++n_waits;
 
+      // 如果尝试了max_spins 次, 那么就将当前cpu 时间片让出
       os_thread_yield();
 
       /* The 4 below is a heuristic that has existed for a
@@ -660,6 +669,7 @@ struct TTASEventMutex {
       above. Otherwise we could have simply done the extra
       spin above. */
 
+      // 然后进入到wait 逻辑, 这个wait 是基于InnoDB 自己实现的wait array 来实现
       if (wait(filename, line, 4)) {
         n_spins += 4;
 

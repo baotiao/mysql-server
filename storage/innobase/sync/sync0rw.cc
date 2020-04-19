@@ -584,6 +584,7 @@ ibool rw_lock_sx_lock_low(
     ut_a(!lock->recursive);
 
     /* Decrement occurred: we are the SX lock owner. */
+    // 加锁成功以后, 设置thread 和 recursive
     rw_lock_set_writer_id_and_recursion_flag(lock, !pass);
 
     lock->sx_recursive = 1;

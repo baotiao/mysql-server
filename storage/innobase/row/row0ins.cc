@@ -2507,6 +2507,9 @@ and return. don't execute actual insert. */
     rec_t *insert_rec;
 
     // 如果当前的mode 不会修改btree 结构, 那么就进入到optimistic_insert 流程
+    // 如果当前mode 不是 BTR_MODIFY_TREE, 那么常见的就是BTR_MODIFY_LEAF
+    // 这次optimistic insert 失败, 就会err 退出, 然后会再一次以BTR_MODIFY_TREE
+    // 进来执行row_ins_clust_index_entry_low()
     if (mode != BTR_MODIFY_TREE) {
       ut_ad((mode & ~BTR_ALREADY_S_LATCHED) == BTR_MODIFY_LEAF);
       err = btr_cur_optimistic_insert(flags, cursor, &offsets, &offsets_heap,
@@ -3092,6 +3095,7 @@ and return. don't execute actual insert. */
     flags = BTR_NO_LOCKING_FLAG | BTR_NO_UNDO_LOG_FLAG;
   }
 
+  // 上面这个table 是intrinsic
   if (index->table->is_intrinsic() && dict_index_is_auto_gen_clust(index)) {
     /* Check if the memory allocated for intrinsic cache*/
     if (!index->last_ins_cur) {
@@ -3100,6 +3104,9 @@ and return. don't execute actual insert. */
     err = row_ins_sorted_clust_index_entry(BTR_MODIFY_LEAF, index, entry, n_ext,
                                            thr);
   } else {
+    // 这里需要和下面的这次row_ins_clust_index_entry_low 联系起来
+    // 如果这次的BTR_MODIFY_LEAF 失败了,
+    // 那么就执行BTR_MODIFY_TREE
     err = row_ins_clust_index_entry_low(flags, BTR_MODIFY_LEAF, index, n_uniq,
                                         entry, n_ext, thr, dup_chk_only);
   }

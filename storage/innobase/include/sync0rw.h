@@ -561,6 +561,8 @@ struct rw_lock_t
   volatile lint lock_word;
 
   /** 1: there are waiters */
+  // waiters 用于标记当前是否有waiter 等待在这个rw_lock 上
+  // 如果有那么就触发唤醒操作, 如果没有就没必要触发唤醒操作
   volatile ulint waiters;
 
   /** Default value FALSE which means the lock is non-recursive.
@@ -620,6 +622,7 @@ struct rw_lock_t
   unsigned last_x_line : 14;
 
   /** Count of os_waits. May not be accurate */
+  // 执行 yield 的次数
   uint32_t count_os_wait;
 
   /** All allocated rw locks are put into a list */
@@ -631,6 +634,7 @@ struct rw_lock_t
 #endif /* UNIV_PFS_RWLOCK */
 
 #ifndef INNODB_RW_LOCKS_USE_ATOMICS
+  // 在没用atomic 操作的时候, 使用mutex 来保证原子性
   /** The mutex protecting rw_lock_t */
   mutable ib_mutex_t mutex;
 #endif /* INNODB_RW_LOCKS_USE_ATOMICS */

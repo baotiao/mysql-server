@@ -1155,6 +1155,8 @@ static void buf_flush_write_block_low(buf_page_t *bpage, buf_flush_t flush_type,
   access bpage, because it is io_fixed and oldest_modification != 0.
   Thus, it cannot be relocated in the buffer pool or removed from
   flush_list or LRU_list. */
+  // 因为已经修改了 io_fixed 和 oldest_modification
+  // 因此到这里已经不需要持有任何mutex 了
   ut_ad(!buf_flush_list_mutex_own(buf_pool));
   ut_ad(!buf_page_get_mutex(bpage)->is_owned());
   ut_ad(buf_page_get_io_fix_unlocked(bpage) == BUF_IO_WRITE);
@@ -1295,6 +1297,8 @@ ibool buf_flush_page(buf_pool_t *buf_pool, buf_page_t *bpage,
   the LRU list mutex allows us to avoid having to store the previous LRU
   list page or to restart the LRU scan in
   buf_flush_single_page_from_LRU(). */
+  // buf_flush_page 的过程是不持有LRU_list_mutex或者flush_list_mutex
+  // 除非是single page flush 才会持有
   ut_ad(flush_type == BUF_FLUSH_SINGLE_PAGE ||
         !mutex_own(&buf_pool->LRU_list_mutex));
   ut_ad(flush_type != BUF_FLUSH_SINGLE_PAGE ||
@@ -1314,6 +1318,7 @@ ibool buf_flush_page(buf_pool_t *buf_pool, buf_page_t *bpage,
 
   ibool flush;
   rw_lock_t *rw_lock = NULL;
+  // 这里如果buf_fix_count != 0, 也就是还有其他thread 也在使用这个page
   bool no_fix_count = bpage->buf_fix_count == 0;
 
   if (!is_uncompressed) {
@@ -1323,6 +1328,10 @@ ibool buf_flush_page(buf_pool_t *buf_pool, buf_page_t *bpage,
              (!no_fix_count &&
               srv_shutdown_state.load() < SRV_SHUTDOWN_FLUSH_PHASE &&
               fsp_is_system_temporary(bpage->id.space()))) {
+    // 这里如果no_fix_cout == false, 也就是buf_fix_count != 0,
+    // 那么就不会将这个page flush. 
+    // 当然这里也可以选择flush 这个page, 但是带来的开销就是获得这个page sx lock
+    // 就需要一直等待, 等待page buf_fix_count=0 才有可能获得
     /* This is a heuristic, to avoid expensive SX attempts. */
     /* For table residing in temporary tablespace sync is done
     using IO_FIX and so before scheduling for flush ensure that
@@ -1343,7 +1352,7 @@ ibool buf_flush_page(buf_pool_t *buf_pool, buf_page_t *bpage,
 
     mutex_enter(&buf_pool->flush_state_mutex);
 
-    // 把 io_fix 设置成 BUF_IO_WRITE
+    // 3. 修改 io_fix 设置成 BUF_IO_WRITE
     buf_page_set_io_fix(bpage, BUF_IO_WRITE);
 
     buf_page_set_flush_type(bpage, flush_type);
@@ -1376,6 +1385,9 @@ ibool buf_flush_page(buf_pool_t *buf_pool, buf_page_t *bpage,
 
     mutex_exit(&buf_pool->flush_state_mutex);
 
+    // 4. 放开buf block mutex
+    // 因为已经修改了 io_fixed 和 oldest_modification
+    // 因此到这里已经不需要持有任何mutex 了
     mutex_exit(block_mutex);
 
     if (flush_type == BUF_FLUSH_SINGLE_PAGE) {
@@ -1393,6 +1405,7 @@ ibool buf_flush_page(buf_pool_t *buf_pool, buf_page_t *bpage,
         buf_dblwr_sync_datafiles();
       }
 
+      // 5. 获得这个page frame 的 rw_lock
       rw_lock_sx_lock_gen(rw_lock, BUF_IO_WRITE);
     }
 
@@ -1410,6 +1423,8 @@ ibool buf_flush_page(buf_pool_t *buf_pool, buf_page_t *bpage,
     oldest_modification != 0.  Thus, it cannot be relocated in the
     buffer pool or removed from flush_list or LRU_list. */
 
+    // 因为已经修改了 io_fixed 和 oldest_modification
+    // 因此到这里已经不需要持有任何mutex 了
     buf_flush_write_block_low(bpage, flush_type, sync);
   }
 
@@ -1585,6 +1600,7 @@ static ulint buf_flush_try_neighbors(const page_id_t &page_id,
 
     buf_pool = buf_pool_get(cur_page_id);
 
+    // 1. 首先获得 hash_lock rw_lock
     /* We only want to flush pages from this buffer pool. */
     bpage = buf_page_hash_get_s_locked(buf_pool, cur_page_id, &hash_lock);
 
@@ -1592,10 +1608,9 @@ static ulint buf_flush_try_neighbors(const page_id_t &page_id,
       continue;
     }
 
+    // 2. 然后是获得page header mutex, 同事释放hash_lock 
     block_mutex = buf_page_get_mutex(bpage);
-
     mutex_enter(block_mutex);
-
     rw_lock_s_unlock(hash_lock);
 
     ut_a(buf_page_in_file(bpage));
@@ -1690,6 +1705,8 @@ static bool buf_flush_page_and_try_neighbors(buf_page_t *bpage,
     }
 
     /* Try to flush also all the neighbors */
+    // 在进行具体flush 操作的时候, 是会将LRU_list_mutex/buf_flush_list mutex
+    // 放开
     *count += buf_flush_try_neighbors(page_id, flush_type, *count, n_to_flush);
 
     if (flush_type == BUF_FLUSH_LRU) {

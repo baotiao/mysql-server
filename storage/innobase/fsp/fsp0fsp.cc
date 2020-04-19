@@ -986,6 +986,7 @@ bool fsp_header_dict_get_server_version(uint *version) {
   return (false);
 }
 
+// 只有在 system tablespace 的时候, 才需要创建 insert buffer
 /** Initializes the space header of a new created space and creates also the
 insert buffer tree root if space == 0.
 @param[in]	space_id	space id
@@ -1008,6 +1009,7 @@ bool fsp_header_init(space_id_t space_id, page_no_t size, mtr_t *mtr,
   const page_id_t page_id(space_id, 0);
   const page_size_t page_size(space->flags);
 
+  // 先确保内存里面有空闲block, 然后下面在内存中创建好信息以后再写入到文件中
   block = buf_page_create(page_id, page_size, RW_SX_LATCH, mtr);
   buf_block_dbg_add_level(block, SYNC_FSP_PAGE);
 
@@ -1017,6 +1019,9 @@ bool fsp_header_init(space_id_t space_id, page_no_t size, mtr_t *mtr,
 
   /* The prior contents of the file page should be ignored */
 
+  // 初始化file_page, 实现方式是通过 mlog_write_initial_log_record
+  // 写一个mtr MLOG_INIT_FILE_PAGE2
+  // 实际写的时候会包含 space_id, page_id, MLOG_INIT_FILE_PAGE2
   fsp_init_file_page(block, mtr);
   page = buf_block_get_frame(block);
 

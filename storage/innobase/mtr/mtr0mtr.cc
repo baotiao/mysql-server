@@ -184,7 +184,10 @@ static void memo_slot_release(mtr_memo_slot_t *slot) {
 #ifndef UNIV_HOTBACKUP
       block = reinterpret_cast<buf_block_t *>(slot->object);
 
+      // 在mtr 提交最后阶段, 如果mtr memory 操作里面包含fix 操作,
+      // 那么会把buf_fix_count--
       buf_block_unfix(block);
+      // 同时在mtr 提交的阶段会把相应的page frame rw_lock 放开
       buf_page_release_latch(block, slot->type);
 #endif /* !UNIV_HOTBACKUP */
       break;

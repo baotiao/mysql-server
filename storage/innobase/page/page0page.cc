@@ -1121,6 +1121,7 @@ void page_delete_rec_list_start(
 
   /* Individual deletes are not logged */
 
+  // 这里page delete 并不会记录redo log
   mtr_log_t log_mode = mtr_set_log_mode(mtr, MTR_LOG_NONE);
 
   while (page_cur_get_rec(&cur1) != rec) {

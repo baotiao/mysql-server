@@ -1717,6 +1717,10 @@ ibool btr_page_get_split_rec_to_right(
   the previous insert on the same page, we assume that there is a
   pattern of sequential inserts here. */
 
+  // PAGE_LAST_INSERT 是当前这个page 最后一次插入的位置
+  // 这个位置也是下一个可以插入的空闲位置
+  // 这里做的一个优化, 如果这次insert 的位置正好是page_last_insert
+  // 那么这里可能是一次顺序的插入
   if (page_header_get_ptr(page, PAGE_LAST_INSERT) == insert_point) {
     rec_t *next_rec;
 
@@ -2014,6 +2018,7 @@ void btr_insert_on_non_leaf_level_func(
 
 /** Attaches the halves of an index page on the appropriate level in an
  index tree. */
+// 这一步将新创建出来的page attach 到father node 上
 static void btr_attach_half_pages(
     uint32_t flags,         /*!< in: undo logging and
                          locking flags */
@@ -2059,6 +2064,8 @@ static void btr_attach_half_pages(
     upper_page_zip = buf_block_get_page_zip(block);
 
     /* Look up the index for the node pointer to page */
+    // 找到father node, 这里需要重新遍历一次btree
+    // 最后会调用到 btr_page_get_father_node_ptr 对btree 重新遍历
     offsets = btr_page_get_father_block(NULL, heap, index, block, mtr, &cursor);
 
     /* Replace the address of the old child node (= page) with the
@@ -2094,6 +2101,8 @@ static void btr_attach_half_pages(
   }
 
   /* Get the level of the split pages */
+  // 获得block 在btree 的level
+  // index_header 里面有一个字段 PAGE_LEVEL 记录LEVEL
   level = btr_page_get_level(buf_block_get_frame(block), mtr);
   ut_ad(level == btr_page_get_level(buf_block_get_frame(new_block), mtr));
 
@@ -2106,6 +2115,8 @@ static void btr_attach_half_pages(
   /* Insert it next to the pointer to the lower half. Note that this
   may generate recursion leading to a split on the higher level. */
 
+  // 这里需要将改动插入到 upper level
+  // 这里的插入有可能再一次引起btree split
   btr_insert_on_non_leaf_level(flags, index, level + 1, node_ptr_upper, mtr);
 
   /* Free the memory heap */
@@ -2372,6 +2383,7 @@ func_start:
       mtr_is_block_fix(mtr, block, MTR_MEMO_PAGE_X_FIX, cursor->index->table));
   ut_ad(!page_is_empty(page));
 
+  // 首先尝试直接插入到右边节点
   /* try to insert to the next page if possible before split */
   rec = btr_insert_into_right_sibling(flags, cursor, offsets, *heap, tuple,
                                       n_ext, mtr);
@@ -2396,6 +2408,8 @@ func_start:
       insert_left =
           btr_page_tuple_smaller(cursor, tuple, offsets, n_uniq, heap);
     }
+    // 如果按照 升序, 默认就是将rec split 到右边
+    // split_rec 指的是
   } else if (btr_page_get_split_rec_to_right(cursor, &split_rec)) {
     direction = FSP_UP;
     hint_page_no = page_no + 1;
@@ -2467,6 +2481,8 @@ func_start:
 
   /* 4. Do first the modifications in the tree structure */
 
+  // 这一步将新创建出来的page attach 到father node 上
+  // 这里有可能insert father node 的时候, father node 也要进一步split
   btr_attach_half_pages(flags, cursor->index, block, first_rec, new_block,
                         direction, mtr);
 

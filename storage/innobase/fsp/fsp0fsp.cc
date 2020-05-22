@@ -1339,6 +1339,9 @@ page_no_t fsp_get_pages_to_extend_ibd(const page_size_t &page_size,
 
   /* The threshold is set at 32MiB except when the physical page
   size is small enough that it must be done sooner. */
+  // 这里设定了 threshold 是32MB
+  //
+  // 从下面可以看到, 如果超过了32MB 大小, size_increase = 4M 否则是1M
   threshold =
       std::min(32 * extent_size, static_cast<page_no_t>(page_size.physical()));
 
@@ -2201,6 +2204,7 @@ static ulint fseg_get_n_frag_pages(
 /** Creates a new segment.
  @return the block where the segment header is placed, x-latched, NULL
  if could not create segment because of lack of space */
+// 创建一个新的file segment
 buf_block_t *fseg_create_general(
     space_id_t space_id, /*!< in: space id */
     page_no_t page,      /*!< in: page where the segment header is
@@ -2276,6 +2280,7 @@ buf_block_t *fseg_create_general(
   /* Read the next segment id from space header and increment the
   value in space header */
 
+  // 从fsp header 上获得当前最大的segment id
   seg_id = mach_read_from_8(space_header + FSP_SEG_ID);
 
   mlog_write_ull(space_header + FSP_SEG_ID, seg_id + 1, mtr);
@@ -2386,7 +2391,13 @@ static ulint fseg_n_reserved_pages_low(
   /* Number of fragment pages in the segment. */
   ulint n_frags = fseg_get_n_frag_pages(inode, mtr);
 
+  // 确认当前segment 具体使用了多少个page
   *used = n_frags + n_total_full + n_used_not_full;
+  // 返回一个segment 申请了多少个page 可以看到由4个部分组成
+  // 1. inode 里面的32 page 组成
+  // 2. FSEG_FREE list
+  // 3. FSEG_NOT_FULL list
+  // 4. FSEG_FULL list
   ret = n_frags + n_total_full + n_total_free + n_total_not_full;
 
   ut_ad(*used <= ret);
@@ -2903,6 +2914,7 @@ got_hinted_page:
 /** Allocates a single free page from a segment. This function implements
  the intelligent allocation strategy which tries to minimize file space
  fragmentation.
+ // 从一个segment 获得一个空闲page, 这里有实现的策略
  @retval NULL if no page could be allocated
  @retval block, rw_lock_x_lock_count(&block->lock) == 1 if allocation succeeded
  (init_mtr == mtr, or the page was not previously freed in mtr)

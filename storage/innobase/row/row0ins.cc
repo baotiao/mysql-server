@@ -2387,8 +2387,10 @@ and return. don't execute actual insert. */
   /* Note that we use PAGE_CUR_LE as the search mode, because then
   the function will return in both low_match and up_match of the
   cursor sensible values */
-  // 在执行btr_pcur_open 的时候会调用 btr_cur_search_to_nth_level
-  // 把pcur 初始化在指定的位置
+  // 这里是最常见调用 btr_cur_search_to_nth_level 的地方
+  // insert 操作的流程是通过btr_cur_search_to_nth_level 确定了要insert
+  // 的btr_pcur_t 之后, 后续执行 btr_cur_optimistic_insert 或者
+  // btr_cur_pessimistic_insert 都是在这个search 确定的位置之后
   btr_pcur_open(index, entry, PAGE_CUR_LE, mode, &pcur, &mtr);
   cursor = btr_pcur_get_btr_cur(&pcur);
   cursor->thr = thr;

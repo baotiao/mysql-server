@@ -218,6 +218,7 @@ btr_latch_leaves_t btr_cur_latch_leaves(buf_block_t *block,
     case BTR_MODIFY_TREE:
       /* It is exclusive for other operations which calls
       btr_page_set_prev() */
+      // 这里锁住pref_node 和 next_node 的时候, 是必须持有index->lock 的x 或者sx
       ut_ad(mtr_memo_contains_flagged(mtr, dict_index_get_lock(cursor->index),
                                       MTR_MEMO_X_LOCK | MTR_MEMO_SX_LOCK) ||
             cursor->index->table->is_intrinsic());

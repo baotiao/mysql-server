@@ -157,7 +157,7 @@ ulint trx_undo_page_get_start(
 {
   ulint start;
 
-  // 从这里可以看出 一个undo page 可能包含有多个undo log header
+  // 从这里可以看出一个undo page 可能包含有多个undo log header
   // 因此读取start 地址的时候, 需要制定offset 来确定是哪一个undo log header
   if (page_no == page_get_page_no(undo_page)) {
     start = mach_read_from_2(offset + undo_page + TRX_UNDO_LOG_START);
@@ -185,7 +185,7 @@ ulint trx_undo_page_get_end(
 
     end = mach_read_from_2(log_hdr + TRX_UNDO_NEXT_LOG);
 
-    // 如果读到的TRX_UNDO_NEXT_LOG == 0, 表示这个undo next log offset 还没有
+    // 如果读到的TRX_UNDO_NEXT_LOG == 0, 表示这个undo next log offset 没有next record
     // 那么就可以从undo page header 里面找一下现在空闲的位置在哪
     // 就是这个log 的END 位置了
     if (end == 0) {

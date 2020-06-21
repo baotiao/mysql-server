@@ -974,6 +974,8 @@ static page_no_t trx_undo_free_page(
     hist_size =
         mtr_read_ulint(rseg_header + TRX_RSEG_HISTORY_SIZE, MLOG_4BYTES, mtr);
     ut_ad(hist_size > 0);
+    // 更新rollback segment header 里面 History size
+    // History Size 表示当前Rollback Segment History page size 个数
     mlog_write_ulint(rseg_header + TRX_RSEG_HISTORY_SIZE, hist_size - 1,
                      MLOG_4BYTES, mtr);
   }

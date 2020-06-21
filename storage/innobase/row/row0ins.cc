@@ -2542,6 +2542,10 @@ and return. don't execute actual insert. */
       }
     }
 
+    // 这里这个mtr 就已经commit() 了
+    // 这个mtr 是在row_ins_clust_index_entry_low() 函数开始的时候创建的mtr
+    // 需要确认, 如果这个时候发生了smo, 那么会创建一个新的mtr 还是一直在这个mtr
+    // 上面修改
     if (big_rec != NULL) {
       mtr.commit();
 

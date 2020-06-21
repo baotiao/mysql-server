@@ -291,6 +291,9 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
   modified table. It may also hold MDL. A concurrent DROP TABLE
   or ALTER TABLE should be impossible, because it should be
   holding both LOCK_X and MDL_EXCLUSIVE on the table. */
+  // 判断是insert 操作回滚还是update 操作回滚
+  // insert 操作回滚简单, 直接丢弃掉对应的Undo log 就可以
+  // update 麻烦一点, 需要重新insert
   if (node->state == UNDO_NODE_INSERT) {
     err = row_undo_ins(node, thr);
 

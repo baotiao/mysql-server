@@ -442,11 +442,14 @@ static void trx_purge_free_segment(trx_rseg_t *rseg, fil_addr_t hdr_addr,
     during the freeing of the segment, and therefore purge should
     not try to access them again. */
 
+    // TODO(baotiao):
     if (!marked) {
       marked = true;
       mlog_write_ulint(log_hdr + TRX_UNDO_DEL_MARKS, FALSE, MLOG_2BYTES, &mtr);
     }
 
+    // 这里只有包含 undo log segment 的page 会返回 true
+    // 其他地方都是返回false
     if (fseg_free_step_not_header(seg_hdr + TRX_UNDO_FSEG_HEADER, false,
                                   &mtr)) {
       break;
@@ -468,6 +471,7 @@ static void trx_purge_free_segment(trx_rseg_t *rseg, fil_addr_t hdr_addr,
   history list: otherwise, in case of a database crash, the segment
   could become inaccessible garbage in the file space. */
 
+  // 将 undo log header 从 rollback segment history list 中删除
   trx_purge_remove_log_hdr(rseg_hdr, log_hdr, &mtr);
 
   do {
@@ -499,6 +503,8 @@ static void trx_purge_truncate_rseg_history(
     trx_rseg_t *rseg,          /*!< in: rollback segment */
     const purge_iter_t *limit) /*!< in: truncate offset */
 {
+  // 这个hdr_addr 包含两个部分, page number 以及在这个page 里面的偏移量
+  // boffset
   fil_addr_t hdr_addr;
   fil_addr_t prev_hdr_addr;
   trx_rsegf_t *rseg_hdr;
@@ -523,10 +529,13 @@ static void trx_purge_truncate_rseg_history(
       trx_rsegf_get(rseg->space_id, rseg->page_no, rseg->page_size, &mtr);
 
   // 从 rollback segment header 上面的 History List Base Node
-  // 读取指向的下一个page 的地址
+  // 上读取最后一个undo log Header, 也就是最老的Undo log header
+  // 
+  // 由于一个undo page 可能包含多个undo log, 因此这个rollback segment history list
+  // 会连接一个Undo page 两次, 但是是不同undo log
   hdr_addr = trx_purge_get_log_from_hist(
       flst_get_last(rseg_hdr + TRX_RSEG_HISTORY, &mtr));
-// 这里通过loop 按照History List Base Node 遍历这个list
+  // 这里通过loop 按照History List Base Node 遍历这个list
 loop:
   if (hdr_addr.page == FIL_NULL) {
     mutex_exit(&(rseg->mutex));
@@ -576,23 +585,27 @@ loop:
       (mach_read_from_2(log_hdr + TRX_UNDO_NEXT_LOG) == 0)) {
     /* We can free the whole log segment */
 
-    // 这个branch 是常见情况, 也就是一个undo page 就一条undo log record
-    // 而且这个undo log record 也只在这个undo page 里面
+    // log_hdr + TRX_UNDO_NEXT_LOG == 0 表示这个undo log 是最后一个undo log,
+    // 当前undo log 已经没有next undo log 了, 因此这里就可以把这个undo page 给清空了
+    // 当然这里把两种场景都处理
+    //
+    // 一个 undo segment 只有一个 undo log 的逻辑
+    //
+    // 1. 一个undo page 只有一个undo log 的场景
+    // 2. 一个undo page 有多个undo log, 但是这个是最后一个undo log
+    // 3. 一个undo log 包含多个undo page 的
     mutex_exit(&(rseg->mutex));
     mtr_commit(&mtr);
 
     /* calls the trx_purge_remove_log_hdr()
     inside trx_purge_free_segment(). */
+    // 这里指的是purge undo log segment 不是rollback segment
     trx_purge_free_segment(rseg, hdr_addr, is_temp);
 
   } else {
     /* Remove the log hdr from the rseg history. */
-    // 这个branch 处理的是一个undo log record 占用了多个undo page 或者一个undo
-    // page 里面包含了多个undo log record
-
-    // 这个branch 表示没有把这个多个undo segment 组成的undo log record 找干净,
-    // 先把当前找到的这个first page 从rollback segment history list 上面删除
-    // 然后在继续loop 去删除剩余的undo segment
+    // 这个branch 处理的是一个 undo page 包含多个undo log, 并且这个undo log 不是
+    // 最后一个, 那么只需要把这个undo log 从rollback segment hisotry list 删除就可以
     trx_purge_remove_log_hdr(rseg_hdr, log_hdr, &mtr);
 
     mutex_exit(&(rseg->mutex));
@@ -1596,10 +1609,11 @@ static void trx_purge_truncate_history(
   }
   trx_sys->tmp_rsegs.s_unlock();
 
-  // 这里看到是先 undo purge 然后再 undo tablespace truncate
   MONITOR_INC_TIME_IN_MICRO_SECS(MONITOR_PURGE_TRUNCATE_HISTORY_MICROSECOND,
                                  counter_time_truncate_history);
 
+  // 到这里 rollback segment truncate 已经结束
+  // 记下来是undo tablespace truncate
   /* UNDO tablespace truncate. We will try to truncate as much as we
   can (greedy approach). This will ensure when the server is idle we
   try and truncate all the UNDO tablespaces. */

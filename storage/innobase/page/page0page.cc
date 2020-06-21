@@ -940,6 +940,7 @@ void page_delete_rec_list_end(
   /* The page gets invalid for optimistic searches: increment the
   frame modify clock */
 
+  // TODO(baotiao); 这里修改 modify_clock 是做什么?
   buf_block_modify_clock_inc(block);
 
   page_delete_rec_list_write_log(

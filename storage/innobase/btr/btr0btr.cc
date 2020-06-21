@@ -680,6 +680,8 @@ static ulint *btr_page_get_father_node_ptr_func(
   user_rec = btr_cur_get_rec(cursor);
   ut_a(page_rec_is_user_rec(user_rec));
 
+  // build 要查找的father node ptr
+  // 放在btr_cur_search_to_nth_level 中进行查找
   tuple = dict_index_build_node_ptr(index, user_rec, 0, heap, level);
   if (index->table->is_intrinsic()) {
     btr_cur_search_to_nth_level_with_no_latch(
@@ -2117,6 +2119,7 @@ static void btr_attach_half_pages(
 
   // 这里需要将改动插入到 upper level
   // 这里的插入有可能再一次引起btree split
+  // 这里依然要求对 index->lock 进行 x lock
   btr_insert_on_non_leaf_level(flags, index, level + 1, node_ptr_upper, mtr);
 
   /* Free the memory heap */
@@ -2366,6 +2369,7 @@ func_start:
   mem_heap_empty(*heap);
   *offsets = NULL;
 
+  // 确保index 已经是x lock 或者 sx lock
   ut_ad(mtr_memo_contains_flagged(mtr, dict_index_get_lock(cursor->index),
                                   MTR_MEMO_X_LOCK | MTR_MEMO_SX_LOCK) ||
         cursor->index->table->is_intrinsic());
@@ -2397,6 +2401,7 @@ func_start:
   /* 1. Decide the split record; split_rec == NULL means that the
   tuple to be inserted should be the first record on the upper
   half-page */
+  // split_rec 表示的是这个page 要split 的位置
   insert_left = FALSE;
 
   if (n_iterations > 0) {
@@ -2483,6 +2488,7 @@ func_start:
 
   // 这一步将新创建出来的page attach 到father node 上
   // 这里有可能insert father node 的时候, father node 也要进一步split
+  // 所以这里依然持有 index->lock  x lock
   btr_attach_half_pages(flags, cursor->index, block, first_rec, new_block,
                         direction, mtr);
 
@@ -2506,6 +2512,10 @@ func_start:
         btr_page_insert_fits(cursor, NULL, offsets, tuple, n_ext, heap);
   }
 
+  // 到这里就把index->sx lock 给放开了
+  // 但是这里有前提条件
+  // insert_will_fit 也就是这次的插入只需要插入到leaf page 就可以, 不会导致btree
+  // 在向上分裂了, 如果再向上分裂, 就无法保证了
   if (!srv_read_only_mode && !cursor->index->table->is_intrinsic() &&
       insert_will_fit && page_is_leaf(page) &&
       !dict_index_is_online_ddl(cursor->index)) {

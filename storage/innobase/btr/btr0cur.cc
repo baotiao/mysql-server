@@ -670,6 +670,9 @@ void btr_cur_search_to_nth_level(
   btr_op_t btr_op;
   ulint root_height = 0; /* remove warning */
 
+  // upper_rw_latch 主要用于记录上一level 的latch 类型
+  // 在锁住block 的时候, 如果是search 相关, 搜索的路径上的block 都是s lock
+  // 如果是modify 相关, 那么搜索路径上的block 就都是 x lock
   ulint upper_rw_latch, root_leaf_rw_latch;
   btr_intention_t lock_intention;
   bool modify_external;
@@ -677,8 +680,13 @@ void btr_cur_search_to_nth_level(
   // 在btree 往下遍历的时候, 每一个level 只会进入一次
   // 因此0 就代表root savepoint, 1 代表下一层依次的
   ulint tree_savepoints[BTR_MAX_LEVELS];
+  // n_blocks 是当前已经遍历到的block, 每一个层级只有一个block
   ulint n_blocks = 0;
+  // n_releases 是当前已经放开sx 的block 的位置
+  // [n_release ~ n_blocks) 之间是已经持有sx 的block.
+  // 等确认需要锁住这些block 的时候, 会把sx lock 转成x lock
   ulint n_releases = 0;
+
   bool detected_same_key_root = false;
 
   bool retrying_for_search_prev = false;
@@ -1015,8 +1023,7 @@ search_loop:
   }
 
   // 之所以需要retry_page_get 是因为有可能写入到ibuf, 但是写入ibuf
-  // 是有可能失败的
-  // 失败以后就需要重新进行数据插入到实际的page 中去
+  // 是有可能失败的, 失败以后就需要重新进行数据插入到实际的page 中去
   //
   // 第一次从buffer pool 获得数据的时候使用的是 fetch mode 是 BUF_GET_IF_IN_POOL 或者BUF_GET_IF_IN_POOL_OR_WATCH
   // 但是如果insert Ibuf 失败了, 那就只能使用BUF_GET 来获得这个page 了,
@@ -1243,14 +1250,14 @@ retry_page_get:
       case BTR_MODIFY_TREE:
       case BTR_CONT_MODIFY_TREE:
       case BTR_CONT_SEARCH_TREE:
-        // 为何这3种latch mode 不需要把savepoint 上的btree 的table latch 释放掉
+        // 为何这3种latch mode 不需要把savepoint 上的btree 的block latch 释放掉
         break;
       default:
         if (!s_latch_by_caller && !srv_read_only_mode && !modify_external) {
           /* Release the tree s-latch */
           /* NOTE: BTR_MODIFY_EXTERNAL
           needs to keep tree sx-latch */
-          // 把在savepoint 上的整个btree 的 table latch 释放掉
+          // 这里已经找到的leaf node, 那么就可以把Index lock 给释放了
           mtr_release_s_latch_at_savepoint(mtr, savepoint,
                                            dict_index_get_lock(index));
         }
@@ -1403,7 +1410,7 @@ retry_page_get:
     }
   }
 
-  // 这里就是循环的地方, 如果往下走的时候, level != height
+  // 这里是循环的地方, 如果往下走的时候, level != height
   // 那么height-- 就代表btree 往下走一层
   // 在这个if 的结尾 又回到search_loop 继续遍历这个btree
   if (level != height) {
@@ -1584,6 +1591,11 @@ retry_page_get:
       // root page 是不会释放的, root page 一直保留sx lock
       // 把除了root 节点以后的中间branch lock 都 release
       // 同时把这个page reference - 1
+      //
+      //
+      // 这里存在这样的场景, level i 如果插入一个数据就有可能modify_tree, 所以遍历的这里暂时不能
+      // 放开block latch, 但是到 level i-1 的时候 发现可以这个操作不会修改当前这个block
+      // 那么就可以把 i, i - 1 的latch 都放开了
       for (; n_releases < n_blocks; n_releases++) {
         if (n_releases == 0) {
           /* we should not release root page
@@ -1744,11 +1756,13 @@ retry_page_get:
       }
     }
 
+    // TODO(baotiao):
     goto need_opposite_intention;
   }
 
-  // 到了这里说明已经search 到指定level 了, 然后如果用户指定的search level == 0
-  // 说明是想要search leaf node, 那么就需要特殊处理一下
+  // 到了这里说明已经search 到指定level 了
+  // if 这个branch 是处理要search 到非leaf node 的场景
+  // 下面的else 就是常见的leaf node 的场景了
   if (level != 0) {
     if (upper_rw_latch == RW_NO_LATCH) {
       /* latch the page */
@@ -2978,7 +2992,7 @@ dberr_t btr_cur_optimistic_insert(
     if (index->table->is_intrinsic()) {
       index->rec_cache.rec_size = rec_size;
 
-      // 如果是系统创建的table, 直接执行insert 操作
+      // 如果是临时表, 直接执行insert 操作
       *rec =
           page_cur_tuple_direct_insert(page_cursor, entry, index, n_ext, mtr);
     } else {

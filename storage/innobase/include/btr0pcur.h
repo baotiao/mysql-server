@@ -295,6 +295,8 @@ struct btr_pcur_t {
   @return true if the cursor position was stored when it was on a user
           record and it can be restored on a user record whose ordering
           fields are identical to the ones of the original user record */
+  // 将cure 恢复到之前store_position 的位置
+  // 这里需要分不同场景的 restore
   bool restore_position(ulint latch_mode, mtr_t *mtr, const char *file,
                         ulint line);
 

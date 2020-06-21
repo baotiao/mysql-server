@@ -2186,6 +2186,8 @@ dberr_t trx_undo_report_row_operation(
     trx_assign_rseg_temp(trx);
   }
 
+  // 这个mtr 是在row_ins_clust_index_entry() mtr 内部的一个mtr
+  //
   mtr_start(&mtr);
 
   // 这里undo_ptr 是从这个trx->rsegs 里面获得, 也就是trx 在进入要写

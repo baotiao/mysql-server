@@ -289,6 +289,10 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
     /* We may have to modify tree structure: do a pessimistic
     descent down the index tree */
 
+    // 上述row_undo_mod_clust_low 失败, 说明这个事务里面有SMO 的操作, 那么trx
+    // rollback 的时候是不应该将这个SMO 操作回滚的, 因此
+    // 同 insert 操作一样, undo_mod 的时候也是有两种场景
+    // BTR_MODIFY_LEAF 和 BTR_MODIFY_TREE
     mtr_start(&mtr);
 
     dict_disable_redo_if_temporary(index->table, &mtr);

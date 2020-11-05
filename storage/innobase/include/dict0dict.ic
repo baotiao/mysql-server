@@ -702,6 +702,9 @@ ulint dict_index_get_n_fields(
  returned by dict_index_get_n_unique_in_tree.
  @return number of fields */
 UNIV_INLINE
+// get_n_unique 不是返回这个table 有多少个unique index
+// 而是这个unique 的字段有多少个unique 字段长度
+// 如果这个index 是int 类型, 就基本用不上
 ulint dict_index_get_n_unique(
     const dict_index_t *index) /*!< in: an internal representation
                                of index (in the dictionary cache) */

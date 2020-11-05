@@ -3188,6 +3188,7 @@ dberr_t Row_sel_get_clust_rec_for_mysql::operator()(
   *out_rec = NULL;
   trx = thr_get_trx(thr);
 
+  // 根据secondary index record 上的内容build 出cluster index key
   row_build_row_ref_in_tuple(prebuilt->clust_ref, rec, sec_index, *offsets,
                              trx);
 
@@ -4652,6 +4653,8 @@ dberr_t row_search_mvcc(byte *buf, page_cur_mode_t mode,
   naturally moves upward (in fetch next) in alphabetical order,
   otherwise downward */
 
+  // moves_up 标记是search mode 是 > = 这种
+  // 如果遇到之前的key 被删除, 那么就跳到next key
   if (direction == 0) {
     if (mode == PAGE_CUR_GE || mode == PAGE_CUR_G || mode >= PAGE_CUR_CONTAIN) {
       moves_up = TRUE;
@@ -4710,6 +4713,7 @@ dberr_t row_search_mvcc(byte *buf, page_cur_mode_t mode,
 
   /* Open or restore index cursor position */
 
+  // 这里 direction != 0, 则direction = ROW_SEL_NEXT | ROW_SEL_PREV 
   if (UNIV_LIKELY(direction != 0)) {
     if (spatial_search) {
       /* R-Tree access does not need to do
@@ -4717,6 +4721,12 @@ dberr_t row_search_mvcc(byte *buf, page_cur_mode_t mode,
       goto next_rec;
     }
 
+    // TODO 为什么这里需要 restore position
+    // 这里direction != 0, 则说明这次是范围查找, 上一次的查找已经保存了pcur 的位置, 
+    // 那么这次就可以直接通过restore 进行恢复, 就不需要重新遍历一次btree
+    //
+    // 这里restore 出来的record 有可能被删除了(话说什么场景会删除, 除非是read uncommit 吧)
+    // 那么就可以跳过, 不需要处理这个record
     ibool need_to_process = sel_restore_position_for_mysql(
         &same_user_rec, BTR_SEARCH_LEAF, pcur, moves_up, &mtr);
 
@@ -4740,6 +4750,8 @@ dberr_t row_search_mvcc(byte *buf, page_cur_mode_t mode,
     }
 
   } else if (dtuple_get_n_fields(search_tuple) > 0) {
+    // 这里direction == 0, 是第一次的search, 所以需要遍历 btree
+    // 这个branch 是index scan
     pcur->m_btr_cur.thr = thr;
 
     if (dict_index_is_spatial(index)) {
@@ -4761,6 +4773,7 @@ dberr_t row_search_mvcc(byte *buf, page_cur_mode_t mode,
     }
 
     // btr_pcur_open 
+    // 在这里进行btree 的查找, 调用 btr_cur_search_to_nth_level, 找到leaf node 为止
     btr_pcur_open_with_no_init(index, search_tuple, mode, BTR_SEARCH_LEAF, pcur,
                                0, &mtr);
 
@@ -4799,6 +4812,11 @@ dberr_t row_search_mvcc(byte *buf, page_cur_mode_t mode,
       }
     }
   } else if (mode == PAGE_CUR_G || mode == PAGE_CUR_L) {
+    // 这个用于 table scan
+    // 和上一个branch 的区别是
+    // index scan 是有条件的, 会根据主键去查找
+    // 而table scan 就是全表扫描操作
+    // 所以全表扫描的时候直接把pcur 放在最左/右 就可以了
     btr_pcur_open_at_index_side(mode == PAGE_CUR_G, index, BTR_SEARCH_LEAF,
                                 pcur, false, 0, &mtr);
   }
@@ -5000,6 +5018,8 @@ rec_loop:
 
     /* fputs("Comparing rec and search tuple\n", stderr); */
 
+    // != 0 表示search_tuple 和当前rec 是不相等的
+    // 那么应该返回record_not_found
     if (0 != cmp_dtuple_rec(search_tuple, rec, index, offsets)) {
       if (set_also_gap_locks && !trx->skip_gap_locks() &&
           prebuilt->select_lock_type != LOCK_NONE &&
@@ -5020,6 +5040,7 @@ rec_loop:
       }
 
       // TODO store_position 有什么用
+      // 如果是range scan, 那么用于下一次restore position, 就可以减少一次btree 查找的过程
       btr_pcur_store_position(pcur, &mtr);
 
       /* The found record was not a match, but may be used
@@ -5307,6 +5328,7 @@ locks_ok:
   }
 
   /* Check if the record matches the index condition. */
+  // 这里
   switch (row_search_idx_cond_check(buf, prebuilt, rec, offsets)) {
     case ICP_NO_MATCH:
       if (did_semi_consistent_read) {
@@ -5323,6 +5345,7 @@ locks_ok:
   /* Get the clustered index record if needed, if we did not do the
   search using the clustered index. */
 
+  // need_to_access_clustered 表示要查找的字段超过了覆盖索引的内容, 需要回表查找了
   if (index != clust_index && prebuilt->need_to_access_clustered) {
   requires_clust_rec:
     ut_ad(index != clust_index);
@@ -5342,6 +5365,8 @@ locks_ok:
     /* The following call returns 'offsets' associated with
     'clust_rec'. Note that 'clust_rec' can be an old version
     built for a consistent read. */
+    // 根据 secondary index 找到cluster index record
+    // 也常叫 回表操作
     err = row_sel_get_clust_rec_for_mysql(
         prebuilt, index, rec, thr, &clust_rec, &offsets, &heap,
         need_vrow ? &vrow : NULL, &mtr, prebuilt->get_lob_undo());
@@ -5467,6 +5492,7 @@ locks_ok:
   by a page latch that was acquired when pcur was positioned.
   The latch will not be released until mtr_commit(&mtr). */
 
+  // 如果使用了 record_buffer 那么尝试更新record_buffer
   if (record_buffer != nullptr ||
       ((match_mode == ROW_SEL_EXACT ||
         prebuilt->n_rows_fetched >= MYSQL_FETCH_CACHE_THRESHOLD) &&
@@ -5722,6 +5748,8 @@ next_rec:
       move = rtr_pcur_move_to_next(search_tuple, mode, prebuilt->select_mode,
                                    pcur, 0, &mtr);
     } else {
+      // 如果pcur 已经是btree 左右边page 的最后一个record
+      // 那么move == false
       move = btr_pcur_move_to_next(pcur, &mtr);
     }
 

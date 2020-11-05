@@ -914,11 +914,13 @@ struct dict_index_t {
   table as index id is not unique for such table
   which is one of the validation criterion for
   ahi. */
+  // n_uniq 表示有多少个field 可以决定当前的这一行
   unsigned n_uniq : 10;     /*!< number of fields from the beginning
                           which are enough to determine an index
                           entry uniquely */
   unsigned n_def : 10;      /*!< number of fields defined so far */
   unsigned n_fields : 10;   /*!< number of fields in the index */
+  // 这个index 有多少个字段field
   unsigned n_nullable : 10; /*!< number of nullable fields */
   unsigned n_instant_nullable : 10;
   /*!< number of nullable fields before first

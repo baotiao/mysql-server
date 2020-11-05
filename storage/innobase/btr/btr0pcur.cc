@@ -346,6 +346,7 @@ void btr_pcur_t::move_backward_from_page(mtr_t *mtr) {
 
   store_position(mtr);
 
+  // 在store_position 之后, 会把对应block lock 给释放掉了
   mtr_commit(mtr);
 
   mtr_start(mtr);

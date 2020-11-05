@@ -343,10 +343,14 @@ bool btr_cur_optimistic_latch_leaves(buf_block_t *block,
   switch (*latch_mode) {
     case BTR_SEARCH_LEAF:
     case BTR_MODIFY_LEAF:
+      // 如果是SEARch_LEAF/MODIFY_LEAF
+      // 那么只需要确定当前page 的modify_clock 没变
       return (buf_page_optimistic_get(*latch_mode, block, modify_clock,
                                       cursor->m_fetch_mode, file, line, mtr));
     case BTR_SEARCH_PREV:
     case BTR_MODIFY_PREV:
+      // 如果是 SEARCH_PREV/MODIFY_PREV
+      // 需要确定当前page P0, prev page P1 都没有变化才可以
       mode = *latch_mode == BTR_SEARCH_PREV ? RW_S_LATCH : RW_X_LATCH;
 
       buf_page_mutex_enter(block);
@@ -987,6 +991,10 @@ void btr_cur_search_to_nth_level(
   // 因为无论怎么search, 最后还是要进入到一个page, 把一个page 里面的数据读取出来
 search_loop:
   fetch = cursor->m_fetch_mode;
+  // 如果执行的是 BTR_MODIFY_TREE, 则一直是持有者RW_NO_LATCH
+  // 也就是经过的non-leaf block 都不会加锁, 只有到最后找到leaf block 以后, 会对
+  // save_point 里面的节点进行加锁
+
   rw_latch = RW_NO_LATCH;
   rtree_parent_modified = false;
 
@@ -1040,6 +1048,7 @@ retry_page_get:
   // 就可以把这次遍历的过程回放出来了
   tree_savepoints[n_blocks] = mtr_set_savepoint(mtr);
   // 第一次进来的时候, 根据root 节点的page_id, 获得对应的Page
+  // 这里如果是 BTR_MODIFY_TREE, 那么rw_latch = NO_LATCH
   block = buf_page_get_gen(page_id, page_size, rw_latch, guess, fetch, file,
                            line, mtr);
   tree_blocks[n_blocks] = block;
@@ -1413,6 +1422,9 @@ retry_page_get:
   // 这里是循环的地方, 如果往下走的时候, level != height
   // 那么height-- 就代表btree 往下走一层
   // 在这个if 的结尾 又回到search_loop 继续遍历这个btree
+  //
+  // 在height == 0, 搜索到leaf node 的时候是不会执行这个逻辑的
+  
   if (level != height) {
     const rec_t *node_ptr;
     ut_ad(height > 0);
@@ -1610,8 +1622,7 @@ retry_page_get:
     }
 
     // 如果已经找到 level, 并且这次操作要修改btree 结构 
-    // 那么把之前的sx latch 升级成x latch
-    // 就是在这里做的
+    // 在这里把search path savepoint 上的block 加x lock
     if (height == level && latch_mode == BTR_MODIFY_TREE) {
       ut_ad(upper_rw_latch == RW_X_LATCH);
       /* we should sx-latch root page, if released already.
@@ -1621,6 +1632,7 @@ retry_page_get:
                                         tree_blocks[0]);
       }
 
+      // 将最后这段还没有放开的路径上的sx lock 转换成 x lock
       /* x-latch the branch blocks not released yet. */
       for (ulint i = n_releases; i <= n_blocks; i++) {
         mtr_block_x_latch_at_savepoint(mtr, tree_savepoints[i], tree_blocks[i]);
@@ -1687,6 +1699,8 @@ retry_page_get:
       }
     }
 
+    // page_id 设置成child node
+    // 并且把搜索的 n_blocks++
     /* Go to the child node */
     page_id.reset(space, btr_node_ptr_get_child_page_no(node_ptr, offsets));
 
@@ -1735,6 +1749,8 @@ retry_page_get:
       }
     }
 
+    // 上面level != height 会跳到 search_loop 进行循环
+    // 因此这个if 之后的代码都是 level == height 的逻辑
     goto search_loop;
   } else if (!dict_index_is_spatial(index) && latch_mode == BTR_MODIFY_TREE &&
              lock_intention == BTR_INTENTION_INSERT &&
@@ -2966,6 +2982,7 @@ dberr_t btr_cur_optimistic_insert(
   we have to split the page to reserve enough free space for
   future updates of records. */
 
+  // 这里是对于连续insert 的优化, 预留出空间
   if (leaf && !page_size.is_compressed() && index->is_clustered() &&
       page_get_n_recs(page) >= 2 &&
       dict_index_get_space_reserve() + rec_size > max_size &&
@@ -3259,6 +3276,8 @@ dberr_t btr_cur_pessimistic_insert(
     btr_search_update_hash_on_insert(cursor);
   }
 #endif
+  // 因为lock_sys 是以page 为单位, 在执行了btr_page_split_and_insert() 以后,
+  // page 对应的Lock_sys结构体也需要改变
   if (inherit && !(flags & BTR_NO_LOCKING_FLAG)) {
     lock_update_insert(btr_cur_get_block(cursor), *rec);
   }

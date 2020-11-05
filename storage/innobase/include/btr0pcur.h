@@ -46,6 +46,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #endif /* UNIV_HOTBACKUP */
 
 /** Relative positions for a stored cursor position */
+// 用在store_position, restore_position 表示在当前record 的前面/后面等等
 enum btr_pcur_pos_t {
   BTR_PCUR_UNSET = 0,
   BTR_PCUR_ON = 1,
@@ -553,10 +554,15 @@ struct btr_pcur_t {
   btr_pcur_pos_t m_rel_pos{BTR_PCUR_UNSET};
 
   /** buffer block when the position was stored */
+  // m_block_when_stored 是store_position 时候保存的block_t 的内容
   buf_block_t *m_block_when_stored{nullptr};
 
   /** the modify clock value of the buffer block when the cursor position
   was stored */
+  // 在判断btr_pcur_restore_position 函数里面, 如何判判断pcur 指向的page 是否发生改变?
+  // 根据就是page->modify_clock, 每一次对于page 的修改操作都会修改modify_clock, 
+  // pcur 中保留了上一次访问page 的modify_clock, 所以再一次对比 cursor->modify_clock 
+  // 和 page->modify_clock 就可以知道page 是否发生了修改. 如果相等就可以复用上一次的page
   uint64_t m_modify_clock{0};
 
   /** the withdraw clock value of the buffer pool when the cursor

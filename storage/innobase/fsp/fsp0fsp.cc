@@ -3084,6 +3084,10 @@ try_again:
   size = mach_read_from_4(space_header + FSP_SIZE);
   ut_ad(size == space->size_in_header);
 
+  // 这里对于两种情形直接申请free page 而不是申请free extent
+  // 1. 如果当前这个ibd 小于 1M
+  // 2. 如果这次申请的page 小于32 个
+  // 这样做的目的避免小的 tablespace 占用额外的空间
   if (size < FSP_EXTENT_SIZE && n_pages < FSP_EXTENT_SIZE / 2) {
     /* Use different rules for small single-table tablespaces */
     *n_reserved = 0;

@@ -550,6 +550,10 @@ void page_cur_search_with_match(
                                 dtuple_get_n_fields_cmp(tuple), &heap);
     }
 
+    // 这里compare 的时候 dtuple_t 里面是有可能包含多个field
+    // 比如一个SQL 里面 where a > 10 && b < 12;
+    // index 里面有可能是包含多个field 的, 这里index 如果是 (a, b) 的话
+    // 那么可能cur_matched_field 值得就是匹配到了第几个了
     cmp = tuple->compare(mid_rec, index, offsets, &cur_matched_fields);
 
     if (cmp > 0) {
@@ -573,6 +577,19 @@ void page_cur_search_with_match(
                || mode == PAGE_CUR_LE_OR_EXTENDS
 #endif /* PAGE_CUR_LE_OR_EXTENDS */
     ) {
+      // 这里是走到compare 相等的逻辑, 已经找到和tuple 相等的record
+      // 这里可以看到 如果mode 是 PAGE_CUR_G, PAGE_CUR_LE, 那么low_rec 是相等的record
+      // 接下来在 goto low_rec_match 的逻辑里面 up_rec 向后一直逼近low_rec 的过程
+      //
+      // 如果是PAGA_CUR_GE || PAGE_CUR_L 则是把up_rec 设置到相等的value, 然后low_rec 一直
+      // 逼近 up_rec 的过程
+      //
+      // 比如 record 里面有 10, 20, 30. 那么如果
+      // select * from t2 where a <= 20;
+      // 那么这个时候 low_rec 是 20 这个值, up_rec 是30
+      //
+      // 如果 select * from t2 where a >= 20;
+      // 那么up_rec 是20 这个值, 然后 low_rec 是10
       if (!cmp && !cur_matched_fields) {
 #ifdef UNIV_DEBUG
         mtr_t mtr;
@@ -595,10 +612,15 @@ void page_cur_search_with_match(
     }
   }
 
+  // 如果mode 是 <= PAGE_CUR_GE 也就是大概这样的查询
+  // select * from table where id >= 10;
+  // 那么这个时候pcur 是放在第一个id > 10 的地方
+  // 比如insert 的时候就是这样的场景
   if (mode <= PAGE_CUR_GE) {
-    // 将cursor 的位置设定到某一个record 上
     page_cur_position(up_rec, block, cursor);
   } else {
+    // 如果是 select * from table where id <= 10;
+    // 那么这个时候 pcur 放在第一个id < 10 的地方
     page_cur_position(low_rec, block, cursor);
   }
 
@@ -827,6 +849,8 @@ void page_cur_search_with_match_bytes(
   if (mode <= PAGE_CUR_GE) {
     page_cur_position(up_rec, block, cursor);
   } else {
+    // insert 使用的mode 是 PAGE_CUR_LE
+    // 使用PAGE_CUR_LE 的时候, cur 指向的就是low_rec
     page_cur_position(low_rec, block, cursor);
   }
 

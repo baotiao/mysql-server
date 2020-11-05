@@ -645,8 +645,8 @@ int cmp_dtuple_rec_with_match_low(const dtuple_t *dtuple, const rec_t *rec,
   for (auto i = *matched_fields; i < n_cmp; ++i) {
     const auto dtuple_field = dtuple_get_nth_field(dtuple, i);
 
-  // 把dtuple 里面的field 一个一个拿出来, 然后到rec_t 里面找到对应的field
-  // 进行比较
+    // 把dtuple 里面的field 一个一个拿出来, 然后到rec_t 里面找到对应的field
+    // 进行比较
     const auto dtuple_b_ptr =
         static_cast<const byte *>(dfield_get_data(dtuple_field));
 

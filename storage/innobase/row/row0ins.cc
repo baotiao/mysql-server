@@ -1897,6 +1897,9 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
       index, entry, PAGE_CUR_GE,
       s_latch ? BTR_SEARCH_LEAF | BTR_ALREADY_S_LATCHED : BTR_SEARCH_LEAF,
       &pcur, mtr);
+  // allow_duplicates = 1 的时候是REPLACE or ON DUPLICATE KEY UPDATE 这种场景
+  // 允许有duplicate 的数据插入操作
+  // allow_duplicates = 0 表示不允许有, 如果duplicate 了, 那么就报错
   allow_duplicates = row_allow_duplicates(thr);
 
   /* Scan index records and check if there is a duplicate */

@@ -1926,6 +1926,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
       /* Set no locks when applying log
       in online table rebuild. */
     } else if (allow_duplicates) {
+      // allow_duplicates branch 走的是 replcae, on duplicate update 等等
 #if 0  // TODO: Enable this assert after WL#9509. REPLACE will not be allowed on
        // DD tables
 			/* This assert means DD tables should not use REPLACE

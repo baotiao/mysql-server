@@ -1891,8 +1891,12 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
 
   n_fields_cmp = dtuple_get_n_fields_cmp(entry);
 
+  // TODO: 这里为啥设置了 n_cmp_fields;
+  // 可能之前只是cmp sk 然后现在cmp <sk, pk>
   dtuple_set_n_fields_cmp(entry, n_unique);
 
+  // TODO: 这里和row_ins_scan_sec_index_for_duplicate 对比 search 从
+  // PAGE_CUR_LE 改成了 PAGE_CUR_GE
   btr_pcur_open(
       index, entry, PAGE_CUR_GE,
       s_latch ? BTR_SEARCH_LEAF | BTR_ALREADY_S_LATCHED : BTR_SEARCH_LEAF,
@@ -1904,6 +1908,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
 
   /* Scan index records and check if there is a duplicate */
 
+  // 这里需要遍历sk page 上面所有的record, 然后
   do {
     const rec_t *rec = btr_pcur_get_rec(&pcur);
     const buf_block_t *block = btr_pcur_get_block(&pcur);

@@ -1632,7 +1632,7 @@ retry_page_get:
                                         tree_blocks[0]);
       }
 
-      // 将最后这段还没有放开的路径上的sx lock 转换成 x lock
+      // 将已经确定要修改的路径上的page 改成 x lock
       /* x-latch the branch blocks not released yet. */
       for (ulint i = n_releases; i <= n_blocks; i++) {
         mtr_block_x_latch_at_savepoint(mtr, tree_savepoints[i], tree_blocks[i]);
